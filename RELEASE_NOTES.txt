@@ -1,0 +1,14 @@
+Milestones M1 and M2 — read-only. Nothing is ever written to the card.
+
+Download the DelugeSampleManager-Setup .exe below and run it. It installs for your user only (no admin prompt).
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+What it does
+- Finds the Deluge card in the reader (or choose any folder, such as a copy of the card).
+- Browse the card and the sample library side by side; waveform, format and loop points for every file.
+- Space plays and stops; "Play on select" auditions as you arrow through a folder.
+- Shows which kits, synths and songs use each sample; double-click one to see the exact line.
+- Health check: missing samples with likely matches, files the Deluge won't play,
+  damaged preset files, unused samples, folder-layout issues, leftover clip takes.
+
+If something goes wrong, use the Log folder button and send the dsm.log file.
