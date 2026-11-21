@@ -1,14 +1,23 @@
-Milestones M1 and M2 — read-only. Nothing is ever written to the card.
+Milestone M3 — import and convert. Version 0.2.0.
 
-Download the DelugeSampleManager-Setup .exe below and run it. It installs for your user only (no admin prompt).
+Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.
 Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
 
-What it does
-- Finds the Deluge card in the reader (or choose any folder, such as a copy of the card).
-- Browse the card and the sample library side by side; waveform, format and loop points for every file.
-- Space plays and stops; "Play on select" auditions as you arrow through a folder.
-- Shows which kits, synths and songs use each sample; double-click one to see the exact line.
-- Health check: missing samples with likely matches, files the Deluge won't play,
-  damaged preset files, unused samples, folder-layout issues, leftover clip takes.
+New
+- Put samples on the card three ways: drag files or folders onto the window, use Import…, or
+  right-click files or a folder in the LIBRARY and choose "Send to the card".
+- Each file is converted to a WAV the Deluge plays: 44.1 kHz, 24-bit, plain header, loop points and
+  root note kept. Files already in that format are copied untouched.
+- Destination: SAMPLES/{FREE|FACTORY|PAID}/{VENDOR}/{PACK}/{category}/NAME.WAV — category (kick, snare,
+  hats, pads, loops…) is worked out from the file and folder names.
+- The library keeps only the originals. Files from outside the library (e.g. Downloads) have their
+  original copied into the library; the card gets the converted copy. The inspector shows the link
+  both ways. The link list is kept in the library at _DSM/mapping.json.
+- Nothing is written until you press Apply in the Pending bar. Apply backs up first (a list of every
+  file, plus a zip of every preset and song), writes, then checks every new file.
+- History lists every change, with Undo (files go to DSM_TRASH on the card, never deleted).
+- Dry run shows what Apply would do without writing anything.
+
+Unchanged: an import only adds files. No existing file, preset or song is touched yet (that is M4).
 
 If something goes wrong, use the Log folder button and send the dsm.log file.

@@ -6,7 +6,7 @@ import os
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QMenu, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
                                QPushButton, QSlider, QSplitter, QTableWidget, QTableWidgetItem, QToolBar,
@@ -19,8 +19,13 @@ from dsm.card.card import DELUGE_OWN_SAMPLE_DIRS, Card, find_cards
 from dsm.index.health import check, library_files
 from dsm.index.index import build_index, snippet, unused_samples
 from dsm.logs import log_dir, open_folder
-from dsm.settings import Settings
+from dsm.importer import apply as ap
+from dsm.importer.mapping import Mapping
+from dsm.importer.plan import expand
+from dsm.settings import Settings, app_dir
+from dsm.ui.apply_dialog import ApplyDialog, HistoryDialog
 from dsm.ui.health_dialog import HealthDialog
+from dsm.ui.import_dialog import ImportDialog
 from dsm.ui.widgets import Job, Waveform, run_job
 
 log = logging.getLogger("dsm.ui")
@@ -49,6 +54,10 @@ class MainWindow(QMainWindow):
         self.list_gen = 0
         self.current = None          # the row dict shown in the inspector
         self.audio = None            # (data, rate) of the current row
+        self.mapping = Mapping(settings["library_root"])
+        self.pending = []            # ImportBatch list — nothing written until Apply
+        self.backed_up_this_session = False
+        self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1400, 860)
         self._build_toolbar()
@@ -74,6 +83,15 @@ class MainWindow(QMainWindow):
         self.health_act.setEnabled(False)
         self.health_act.triggered.connect(self._run_health)
         tb.addAction(self.health_act)
+        self.import_act = QAction("Import…", self)
+        self.import_act.setToolTip("Choose files to put on the card (or drag them onto the window)")
+        self.import_act.setEnabled(False)
+        self.import_act.triggered.connect(self._import_files_dialog)
+        tb.addAction(self.import_act)
+        h = QAction("History", self)
+        h.setToolTip("Every change made to a card, with Undo")
+        h.triggered.connect(lambda: HistoryDialog(self, self).exec())
+        tb.addAction(h)
         s = QAction("Settings", self)
         s.triggered.connect(self._settings_dialog)
         tb.addAction(s)
@@ -91,18 +109,41 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding, spacer.sizePolicy().verticalPolicy())
         tb.addWidget(spacer)
-        badge = QLabel("  READ-ONLY BUILD — nothing is written to the card  ")
+        badge = QLabel("  Nothing is written to the card until you press Apply  ")
         badge.setStyleSheet("background:#d8f0e4;color:#065f46;font-weight:600;border-radius:4px;padding:3px;")
         tb.addWidget(badge)
 
     def _build_body(self):
+        central = QWidget()
+        cl = QVBoxLayout(central)
+        cl.setContentsMargins(0, 0, 0, 0)
         split = QSplitter()
-        self.setCentralWidget(split)
+        cl.addWidget(split, 1)
+        self.tray = QWidget()
+        tl = QHBoxLayout(self.tray)
+        tl.setContentsMargins(6, 4, 6, 4)
+        self.tray.setStyleSheet("background:#fff7ed;")
+        self.tray_list = QListWidget()
+        self.tray_list.setMaximumHeight(70)
+        tl.addWidget(QLabel("<b style='color:#7c2d12'>Pending</b><br/><span style='color:#7c2d12'>not written yet</span>"))
+        tl.addWidget(self.tray_list, 1)
+        rm = QPushButton("Remove")
+        rm.clicked.connect(self._remove_pending)
+        self.apply_btn = QPushButton("Apply…")
+        self.apply_btn.setStyleSheet("background:#2563eb;color:white;font-weight:600;padding:6px 14px;")
+        self.apply_btn.clicked.connect(self._apply)
+        tl.addWidget(rm)
+        tl.addWidget(self.apply_btn)
+        self.tray.hide()
+        cl.addWidget(self.tray)
+        self.setCentralWidget(central)
         # sources
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.currentItemChanged.connect(self._tree_select)
         self.tree.itemExpanded.connect(self._tree_expand)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._tree_menu)
         split.addWidget(self.tree)
         # file list
         mid = QWidget()
@@ -116,7 +157,9 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Name", "Length", "kHz/bit", "Used", "Deluge"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.setSortingEnabled(True)
@@ -171,6 +214,10 @@ class MainWindow(QMainWindow):
         form.addRow("Length", self.f_len)
         form.addRow("Loop / root", self.f_loop)
         form.addRow("Location", self.f_where)
+        self.f_link = QLabel()
+        self.f_link.setWordWrap(True)
+        self.f_link.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        form.addRow("Original / copy", self.f_link)
         il.addLayout(form)
         self.problems = QLabel()
         self.problems.setWordWrap(True)
@@ -273,6 +320,7 @@ class MainWindow(QMainWindow):
         else:
             self.warn.hide()
         self.health_act.setEnabled(True)
+        self.import_act.setEnabled(True)
         self._build_card_tree()
 
     # ------------------------------------------------------------------ tree
@@ -465,7 +513,7 @@ class MainWindow(QMainWindow):
             s.setForeground(col)
             self.table.setItem(r, 4, s)
         self.table.setSortingEnabled(True)
-        bits = [f"{title} · {len(infos)} files"]
+        bits = [f"{title} · {len(infos)} file{'s' if len(infos) != 1 else ''}"]
         if bad:
             bits.append(f"{bad} won't play on the Deluge")
         if convert:
@@ -550,6 +598,7 @@ class MainWindow(QMainWindow):
         else:
             for w in (self.f_format, self.f_rate, self.f_len, self.f_loop, self.problems):
                 w.setText("…")
+        self.f_link.setText(self._link_text(row))
         self.used.clear()
         if row["where"] == "card" and self.index:
             refs = self.index.uses(row["rel"])
@@ -679,7 +728,14 @@ class MainWindow(QMainWindow):
         row.addWidget(path, 1)
         row.addWidget(pick)
         lay.addRow("Sample library folder", row)
-        lay.addRow("", QLabel("Holds FREE, FACTORY and PAID, the same layout as the card."))
+        lay.addRow("", QLabel("Holds FREE, FACTORY and PAID. Keeps the originals; the card gets converted copies."))
+        bpath = QLineEdit(self.settings.get("backup_root") or os.path.join(app_dir(), "Backups"))
+        bpick = QPushButton("Browse…")
+        bpick.clicked.connect(lambda: bpath.setText(QFileDialog.getExistingDirectory(dlg, "Backup folder", bpath.text()) or bpath.text()))
+        brow = QHBoxLayout()
+        brow.addWidget(bpath, 1)
+        brow.addWidget(bpick)
+        lay.addRow("Backup folder", brow)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
@@ -687,10 +743,145 @@ class MainWindow(QMainWindow):
         dlg.resize(620, 140)
         if dlg.exec():
             self.settings["library_root"] = path.text().strip()
+            self.settings["backup_root"] = bpath.text().strip()
             self.settings.save()
+            self.mapping = Mapping(self.settings["library_root"])
             self._build_library_root()
 
+    # ------------------------------------------------------------------ import (M3)
+    def _link_text(self, row) -> str:
+        if row["where"] == "card":
+            link = self.mapping.for_card(row["rel"])
+            return f"Original in the library: {link.library}" if link else "—"
+        lib = self.settings["library_root"]
+        try:
+            rel = os.path.relpath(row["abs"], lib).replace(os.sep, "/")
+        except ValueError:
+            return "—"
+        links = self.mapping.for_library(rel)
+        return ("On the card as: " + ", ".join(x.card for x in links)) if links else "Not on the card"
+
+    def _import_files_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Files to put on the card", self.settings["library_root"],
+                                                "Audio (*.wav *.wave *.aif *.aiff *.aifc *.flac *.ogg *.mp3)")
+        if paths:
+            self._start_import([(p, None) for p in paths])
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
+        if paths:
+            self._start_import(expand(paths))
+
+    def _table_menu(self, pos):
+        rows = [self._row_at(i.row()) for i in self.table.selectionModel().selectedRows()]
+        lib_rows = [r for r in rows if r and r["where"] == "lib"]
+        if not lib_rows:
+            return
+        m = QMenu(self)
+        a = m.addAction(f"Send {len(lib_rows)} to the card…")
+        if m.exec(self.table.viewport().mapToGlobal(pos)) is a:
+            self._start_import([(r["abs"], None) for r in lib_rows])
+
+    def _tree_menu(self, pos):
+        it = self.tree.itemAt(pos)
+        d = it.data(0, Qt.UserRole) if it else None
+        if not d or d[0] not in ("lib", "libroot"):
+            return
+        m = QMenu(self)
+        a = m.addAction("Send this whole folder to the card…")
+        if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
+            self._start_import([(f, None) for f, _ in expand([d[1]])])
+
+    def _start_import(self, files):
+        if not self.card:
+            QMessageBox.information(self, APP_NAME, "Open the card first, then import.")
+            return
+        if not files:
+            QMessageBox.information(self, APP_NAME, "No audio files there.")
+            return
+        self.status_lbl.setText(f"Reading {len(files)} files…")
+
+        def work(progress):
+            out = {}
+            for k, (f, _) in enumerate(files):
+                out[f] = inspect(f)
+                if k % 10 == 0:
+                    progress(k, len(files), os.path.basename(f))
+            return out
+
+        def done(infos):
+            self.prog.hide()
+            self.status_lbl.setText("")
+            dests = [i.card_rel for b in self.pending for i in b.active]
+            dlg = ImportDialog(files, infos, self.card, self.settings["library_root"], self.mapping, dests, self)
+            if dlg.exec() and dlg.batch and dlg.batch.active:
+                self.pending.append(dlg.batch)
+                self._update_tray()
+        run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
+
+    def _update_tray(self):
+        self.tray_list.clear()
+        for b in self.pending:
+            self.tray_list.addItem(b.summary())
+        self.tray.setVisible(bool(self.pending))
+        n = sum(len(b.active) for b in self.pending)
+        self.apply_btn.setText(f"Apply {n} change{'s' if n != 1 else ''}…")
+
+    def _remove_pending(self):
+        r = self.tray_list.currentRow()
+        if r < 0 and self.pending:
+            r = len(self.pending) - 1
+        if 0 <= r < len(self.pending):
+            del self.pending[r]
+            self._update_tray()
+
+    def _apply(self, dry=False):
+        if not self.pending or not self.card:
+            return
+        backup_root = self.settings.get("backup_root") or os.path.join(app_dir(), "Backups")
+        full = not self.backed_up_this_session
+        dlg = ApplyDialog(self.pending, self.card, backup_root, full, self)
+        if not dlg.exec() or not dlg.choice:
+            return
+        dry = dlg.choice == "dry"
+        batches, card, lib, mapping = list(self.pending), self.card, self.settings["library_root"], self.mapping
+
+        def work(progress):
+            return ap.apply(batches, card, lib if lib and os.path.isdir(lib) else None, mapping, backup_root, full,
+                            dry_run=dry, progress=progress)
+
+        def done(j):
+            self.prog.hide()
+            if dry:
+                box = QMessageBox(QMessageBox.Information, "Dry run", "Nothing was written. This is what Apply would do:")
+                box.setDetailedText("\n".join(j.log))
+                box.exec()
+                return
+            self.backed_up_this_session = True
+            self.pending.clear()
+            self._update_tray()
+            QMessageBox.information(self, "Done", f"{len(j.created_card)} files written to the card and checked.\n"
+                                    f"{len(j.created_library)} originals copied into the library.\n\n"
+                                    "Undo is in History.")
+            self._build_library_root()
+            self._refresh()
+
+        def failed(msg):
+            self.prog.hide()
+            QMessageBox.warning(self, "Apply stopped", f"{msg}\n\nAnything this run had written was removed again, so "
+                                "the card is as it was. The pending changes are still there.")
+        run_job(Job(work, wants_progress=True), done=done, failed=failed, progress=self._progress)
+
     def closeEvent(self, e):
+        if self.pending and QMessageBox.question(
+                self, APP_NAME, "There are pending changes that haven't been applied. Quit and discard them?") \
+                != QMessageBox.Yes:
+            e.ignore()
+            return
         self._stop()
         self.settings.save()
         super().closeEvent(e)
