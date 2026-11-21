@@ -22,4 +22,6 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - When writes arrive (M3+), every write goes through the pending tray, backup, atomic write, verify, journal.
 - XML is never re-serialised; only the recorded byte ranges of path values change.
 - Bump `dsm/__init__.py` `__version__` and `RELEASE_NOTES.txt` for each release.
+- After each release, put the Setup .exe and a source zip (`git archive`, named `Deluge Sample Manager X.Y.Z - source.zip`)
+  in Google Drive at Studio → Software → Deluge Sample Manager, and move the previous version's pair into its Archive subfolder.
 - Test the UI offscreen (QT_QPA_PLATFORM=offscreen) and look at screenshots before pushing.
