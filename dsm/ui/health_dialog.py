@@ -1,6 +1,8 @@
 """The health check report."""
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSplitter,
@@ -23,6 +25,8 @@ SECTIONS = [
 
 class HealthDialog(QDialog):
     show_path = Signal(str)
+    relink = Signal(str, str)          # missing path as written, card file to point at
+    factory = Signal()
 
     def __init__(self, report: HealthReport, card_label: str, parent=None):
         super().__init__(parent)
@@ -64,11 +68,24 @@ class HealthDialog(QDialog):
         self.go = QPushButton("Show in browser")
         self.go.setEnabled(False)
         self.go.clicked.connect(self._go)
+        self.fix = QPushButton("Relink to this match")
+        self.fix.setToolTip("Point every preset that uses the missing path at the matching file on the card")
+        self.fix.hide()
+        self.fix.clicked.connect(self._relink)
+        self.pick = QPushButton("Relink to a file…")
+        self.pick.hide()
+        self.pick.clicked.connect(self._relink_pick)
+        self.fact = QPushButton("Move the factory library under FACTORY…")
+        self.fact.hide()
+        self.fact.clicked.connect(lambda: (self.factory.emit(), self.accept()))
         copy = QPushButton("Copy report")
         copy.clicked.connect(self._copy)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         btns.addWidget(self.go)
+        btns.addWidget(self.fix)
+        btns.addWidget(self.pick)
+        btns.addWidget(self.fact)
         btns.addStretch()
         btns.addWidget(copy)
         btns.addWidget(close)
@@ -78,10 +95,20 @@ class HealthDialog(QDialog):
         if not item:
             return
         kind, val = item.data(0, Qt.UserRole)
+        self.fix.hide()
+        self.pick.hide()
+        self.fact.hide()
         if kind == "help":
             self.detail.setPlainText(val)
             self.go.setEnabled(False)
             return
+        if val.kind == "missing":
+            self.pick.show()
+            on_card = [x for x in val.suggestions if x.startswith("On the card: ")]
+            if len(on_card) == 1:
+                self.fix.show()
+        if val.kind == "layout" and "outside FREE" in val.title:
+            self.fact.show()
         text = val.title + "\n\n" + val.detail
         if val.suggestions:
             text += "\n\nPossible matches:\n  " + "\n  ".join(val.suggestions)
@@ -94,6 +121,36 @@ class HealthDialog(QDialog):
             kind, val = item.data(0, Qt.UserRole)
             if kind == "finding":
                 self.show_path.emit(val.path)
+
+    def _current_finding(self):
+        item = self.tree.currentItem()
+        if item:
+            kind, val = item.data(0, Qt.UserRole)
+            if kind == "finding":
+                return val
+        return None
+
+    def _relink(self):
+        f = self._current_finding()
+        if f:
+            target = [x for x in f.suggestions if x.startswith("On the card: ")][0][len("On the card: "):]
+            self.relink.emit(f.path, target)
+            self.fix.setEnabled(False)
+            self.fix.setText("Added to Pending")
+
+    def _relink_pick(self):
+        f = self._current_finding()
+        if not f:
+            return
+        from PySide6.QtWidgets import QFileDialog
+        root = self.parent().card.root
+        path, _ = QFileDialog.getOpenFileName(self, f"Which file should {f.path.rsplit('/', 1)[-1]} point at?",
+                                              os.path.join(root, "SAMPLES"), "Audio (*.wav *.aif *.aiff)")
+        if path:
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            if rel.startswith(".."):
+                return
+            self.relink.emit(f.path, rel)
 
     def _copy(self):
         lines = []

@@ -6,7 +6,7 @@ import os
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QMenu, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QInputDialog, QMenu, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
                                QPushButton, QSlider, QSplitter, QTableWidget, QTableWidgetItem, QToolBar,
@@ -19,6 +19,7 @@ from dsm.card.card import DELUGE_OWN_SAMPLE_DIRS, Card, find_cards
 from dsm.index.health import check, library_files
 from dsm.index.index import build_index, snippet, unused_samples
 from dsm.logs import log_dir, open_folder
+from dsm.edit import edits as ed
 from dsm.importer import apply as ap
 from dsm.importer.mapping import Mapping
 from dsm.importer.plan import expand
@@ -92,6 +93,11 @@ class MainWindow(QMainWindow):
         h.setToolTip("Every change made to a card, with Undo")
         h.triggered.connect(lambda: HistoryDialog(self, self).exec())
         tb.addAction(h)
+        self.factory_act = QAction("Factory move…", self)
+        self.factory_act.setToolTip("Move the factory samples under SAMPLES/FACTORY and update every preset")
+        self.factory_act.setVisible(False)
+        self.factory_act.triggered.connect(self._factory_dialog)
+        tb.addAction(self.factory_act)
         s = QAction("Settings", self)
         s.triggered.connect(self._settings_dialog)
         tb.addAction(s)
@@ -321,6 +327,8 @@ class MainWindow(QMainWindow):
             self.warn.hide()
         self.health_act.setEnabled(True)
         self.import_act.setEnabled(True)
+        folders, loose = ed.factory_candidates(self.card)
+        self.factory_act.setVisible(bool(folders or loose))
         self._build_card_tree()
 
     # ------------------------------------------------------------------ tree
@@ -698,6 +706,9 @@ class MainWindow(QMainWindow):
             else:
                 dlg = HealthDialog(rep, self.card.facts.label or self.card.root, self)
                 dlg.show_path.connect(lambda p: (self.select_card_path(p)))
+                dlg.relink.connect(lambda old, new: self._add_edit(ed.EditBatch(
+                    f"Relink {old.rsplit('/', 1)[-1]} → {new}", relinks=[(old, new)])))
+                dlg.factory.connect(self._factory_dialog)
                 dlg.show()
         run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
 
@@ -779,22 +790,172 @@ class MainWindow(QMainWindow):
     def _table_menu(self, pos):
         rows = [self._row_at(i.row()) for i in self.table.selectionModel().selectedRows()]
         lib_rows = [r for r in rows if r and r["where"] == "lib"]
-        if not lib_rows:
-            return
+        card_rows = [r for r in rows if r and r["where"] == "card"]
         m = QMenu(self)
-        a = m.addAction(f"Send {len(lib_rows)} to the card…")
-        if m.exec(self.table.viewport().mapToGlobal(pos)) is a:
+        acts = {}
+        if lib_rows:
+            acts[m.addAction(f"Send {len(lib_rows)} to the card…")] = "send"
+        if card_rows and self.index:
+            if len(card_rows) == 1:
+                acts[m.addAction("Rename…")] = "rename"
+            acts[m.addAction(f"Move {len(card_rows)} to another folder…")] = "move"
+            unused = [r for r in card_rows if not self.index.uses(r["rel"])]
+            if unused:
+                acts[m.addAction(f"Move {len(unused)} unused to the card trash")] = "trash"
+        if not acts:
+            return
+        what = acts.get(m.exec(self.table.viewport().mapToGlobal(pos)))
+        if what == "send":
             self._start_import([(r["abs"], None) for r in lib_rows])
+        elif what == "rename":
+            self._rename_file(card_rows[0]["rel"])
+        elif what == "move":
+            self._move_files([r["rel"] for r in card_rows])
+        elif what == "trash":
+            rels = [r["rel"] for r in card_rows if not self.index.uses(r["rel"])]
+            self._add_edit(ed.EditBatch(f"Move {len(rels)} unused samples to the card trash", trash=rels))
 
     def _tree_menu(self, pos):
         it = self.tree.itemAt(pos)
         d = it.data(0, Qt.UserRole) if it else None
+        if d and d[0] == "card" and d[1].upper().startswith("SAMPLES/") and self.index:
+            m = QMenu(self)
+            ren = m.addAction("Rename folder…")
+            mov = m.addAction("Move folder into…")
+            got = m.exec(self.tree.viewport().mapToGlobal(pos))
+            if got is ren:
+                self._rename_folder(d[1])
+            elif got is mov:
+                self._move_folder(d[1])
+            return
         if not d or d[0] not in ("lib", "libroot"):
             return
         m = QMenu(self)
         a = m.addAction("Send this whole folder to the card…")
         if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
             self._start_import([(f, None) for f, _ in expand([d[1]])])
+
+    # ------------------------------------------------------------------ rename / move / relink (M4)
+    def _add_edit(self, batch):
+        if not batch.active:
+            return
+        edits = [b for b in self.pending if getattr(b, "kind", "") == "edit"]
+        before = set(ed.plan(edits, self.index).problems) if edits else set()
+        p = ed.plan(edits + [batch], self.index)
+        new = [x for x in p.problems if x not in before]
+        if new:
+            QMessageBox.warning(self, APP_NAME, "That change can't be made:\n\n" + "\n".join(new[:12]))
+            return
+        self.pending.append(batch)
+        self._update_tray()
+        refs = ed.plan([batch], self.index).ref_count
+        self.status_lbl.setText(f"Added to Pending: {batch.title}" + (f" — {refs} preset references will follow" if refs else ""))
+
+    def _sample_dirs(self):
+        return sorted((d for d in self.card.dirs if d.upper().startswith("SAMPLES")), key=str.lower)
+
+    def _rename_file(self, rel):
+        folder, name = rel.rsplit("/", 1)
+        stem, ext = os.path.splitext(name)
+        new, ok = QInputDialog.getText(self, "Rename sample", f"New name for {name}\n"
+                                       f"(every kit, synth and song that uses it will follow)", text=stem)
+        new = new.strip()
+        if not ok or not new or new == stem:
+            return
+        if not os.path.splitext(new)[1]:
+            new += ext
+        if "/" in new or "\\" in new:
+            QMessageBox.warning(self, APP_NAME, "Use Move to put it in another folder.")
+            return
+        self._add_edit(ed.EditBatch(f"Rename {name} → {new}", moves=[(rel, f"{folder}/{new}")]))
+
+    def _pick_folder(self, title, exclude=None):
+        dirs = [d for d in self._sample_dirs() if not (exclude and (d == exclude or d.startswith(exclude + "/")))]
+        target, ok = QInputDialog.getItem(self, title, "Folder on the card (pick one, or type a new path):",
+                                          dirs, 0, True)
+        target = target.strip().strip("/").replace("\\", "/")
+        if not ok or not target:
+            return None
+        if not target.upper().startswith("SAMPLES"):
+            target = "SAMPLES/" + target
+        return target
+
+    def _move_files(self, rels):
+        target = self._pick_folder(f"Move {len(rels)} sample{'s' if len(rels) != 1 else ''}")
+        if target:
+            self._add_edit(ed.EditBatch(f"Move {len(rels)} sample{'s' if len(rels) != 1 else ''} → {target}",
+                                        moves=[(r, f"{target}/{r.rsplit('/', 1)[1]}") for r in rels]))
+
+    def _rename_folder(self, d):
+        parent, name = d.rsplit("/", 1)
+        new, ok = QInputDialog.getText(self, "Rename folder", f"New name for {name}", text=name)
+        new = new.strip().strip("/")
+        if ok and new and new != name and "/" not in new:
+            self._add_edit(ed.folder_move(self.card, d, f"{parent}/{new}", f"Rename folder {d} → {new}"))
+
+    def _move_folder(self, d):
+        target = self._pick_folder(f"Move folder {d.rsplit('/', 1)[1]} into", exclude=d)
+        if target:
+            self._add_edit(ed.folder_move(self.card, d, f"{target}/{d.rsplit('/', 1)[1]}"))
+
+    def _factory_dialog(self):
+        if not self.card or not self.index:
+            return
+        folders, loose = ed.factory_candidates(self.card)
+        if not folders and not loose:
+            QMessageBox.information(self, APP_NAME, "Nothing to move: every folder in SAMPLES is already in "
+                                    "FREE, FACTORY, PAID or one of the Deluge's own folders.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Move the factory library under SAMPLES/FACTORY")
+        dlg.resize(640, 560)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("These are the folders in SAMPLES that aren't in FREE, FACTORY or PAID. On a card that came "
+                             "from the factory they are all factory samples. Untick anything that is yours — it stays "
+                             "where it is and you can file it later.<br/><br/>Every kit, synth and song that uses a moved "
+                             "sample is updated to the new path."))
+        lst = QListWidget()
+        for f in folders:
+            n = sum(1 for k in self.card.files if k.startswith(f"samples/{f.lower()}/"))
+            it = QListWidgetItem(f"SAMPLES/{f}   ({n} file{'s' if n != 1 else ''})")
+            it.setData(Qt.UserRole, f)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            lst.addItem(it)
+        if loose:
+            it = QListWidgetItem(f"{len(loose)} loose file{'s' if len(loose) != 1 else ''} directly in SAMPLES")
+            it.setData(Qt.UserRole, None)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            lst.addItem(it)
+        lay.addWidget(lst, 1)
+        info = QLabel()
+        lay.addWidget(info)
+        bb = QDialogButtonBox()
+        ok_btn = bb.addButton("Add to pending", QDialogButtonBox.AcceptRole)
+        bb.addButton(QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        def chosen():
+            fs = [lst.item(i).data(Qt.UserRole) for i in range(lst.count()) if lst.item(i).checkState() == Qt.Checked]
+            return [f for f in fs if f], (loose if None in fs else [])
+
+        def update(*_):
+            fs, ls = chosen()
+            b = ed.factory_move(self.card, fs, ls)
+            p = ed.plan([b], self.index)
+            info.setText(f"<b>{len(p.moves)}</b> files move · <b>{len(p.xml)}</b> preset and song files change "
+                         f"({p.ref_count} references)" + ("" if not p.problems else
+                                                          f"<br/><span style='color:#b91c1c'>{p.problems[0]}</span>"))
+            ok_btn.setEnabled(bool(p.moves) and not p.problems)
+        lst.itemChanged.connect(update)
+        update()
+        self._factory_preview = dlg
+        if dlg.exec():
+            fs, ls = chosen()
+            self._add_edit(ed.factory_move(self.card, fs, ls))
 
     def _start_import(self, files):
         if not self.card:
@@ -816,7 +977,8 @@ class MainWindow(QMainWindow):
         def done(infos):
             self.prog.hide()
             self.status_lbl.setText("")
-            dests = [i.card_rel for b in self.pending for i in b.active]
+            dests = [i.card_rel for b in self.pending if getattr(b, "kind", "import") != "edit" for i in b.active]
+            dests += [n for b in self.pending if getattr(b, "kind", "") == "edit" for _, n in b.moves]
             dlg = ImportDialog(files, infos, self.card, self.settings["library_root"], self.mapping, dests, self)
             if dlg.exec() and dlg.batch and dlg.batch.active:
                 self.pending.append(dlg.batch)
@@ -844,36 +1006,65 @@ class MainWindow(QMainWindow):
             return
         backup_root = self.settings.get("backup_root") or os.path.join(app_dir(), "Backups")
         full = not self.backed_up_this_session
-        dlg = ApplyDialog(self.pending, self.card, backup_root, full, self)
+        imports = [b for b in self.pending if getattr(b, "kind", "import") != "edit"]
+        edits = [b for b in self.pending if getattr(b, "kind", "") == "edit"]
+        eplan = ed.plan(edits, self.index) if edits else None
+        dlg = ApplyDialog(self.pending, self.card, backup_root, full, eplan, self)
         if not dlg.exec() or not dlg.choice:
             return
         dry = dlg.choice == "dry"
-        batches, card, lib, mapping = list(self.pending), self.card, self.settings["library_root"], self.mapping
+        card, lib, mapping = self.card, self.settings["library_root"], self.mapping
+
+        imports_done = []
 
         def work(progress):
-            return ap.apply(batches, card, lib if lib and os.path.isdir(lib) else None, mapping, backup_root, full,
-                            dry_run=dry, progress=progress)
+            out = []
+            if imports:
+                out.append(ap.apply(imports, card, lib if lib and os.path.isdir(lib) else None, mapping, backup_root,
+                                    full, dry_run=dry, progress=progress))
+                imports_done.append(True)
+            if edits:
+                # plan again against the card as it is now (imports only add files, but be exact)
+                from dsm.index.index import build_index
+                card.scan()
+                idx = build_index(card)
+                p = ed.plan(edits, idx)
+                out.append(ed.apply(p, edits, card, mapping, backup_root, full and not imports, dry_run=dry,
+                                    progress=progress))
+            return out
 
-        def done(j):
+        def done(js):
             self.prog.hide()
             if dry:
                 box = QMessageBox(QMessageBox.Information, "Dry run", "Nothing was written. This is what Apply would do:")
-                box.setDetailedText("\n".join(j.log))
+                box.setDetailedText("\n".join(line for j in js for line in j.log))
                 box.exec()
                 return
             self.backed_up_this_session = True
             self.pending.clear()
             self._update_tray()
-            QMessageBox.information(self, "Done", f"{len(j.created_card)} files written to the card and checked.\n"
-                                    f"{len(j.created_library)} originals copied into the library.\n\n"
-                                    "Undo is in History.")
+            msg = []
+            for j in js:
+                if j.kind == "edit":
+                    msg.append(f"{len(j.moved)} files moved or renamed, {len(j.trashed)} to the trash, "
+                               f"{len(j.xml_after)} preset and song files updated — all checked.")
+                else:
+                    msg.append(f"{len(j.created_card)} files written to the card and checked; "
+                               f"{len(j.created_library)} originals copied into the library.")
+            QMessageBox.information(self, "Done", "\n".join(msg) + "\n\nUndo is in History.")
             self._build_library_root()
             self._refresh()
 
         def failed(msg):
             self.prog.hide()
-            QMessageBox.warning(self, "Apply stopped", f"{msg}\n\nAnything this run had written was removed again, so "
-                                "the card is as it was. The pending changes are still there.")
+            if imports_done and not dry and edits:
+                # the import step finished before the edit step failed: those files are on the card now
+                self.pending = [b for b in self.pending if getattr(b, "kind", "") == "edit"]
+                self._update_tray()
+            QMessageBox.warning(self, "Apply stopped", f"{msg}\n\nThe step that failed was undone, so the card is as it "
+                                "was before it. History shows anything that did finish. The pending changes are "
+                                "still there.")
+            self._refresh()
         run_job(Job(work, wants_progress=True), done=done, failed=failed, progress=self._progress)
 
     def closeEvent(self, e):

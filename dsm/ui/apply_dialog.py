@@ -11,10 +11,11 @@ from dsm.importer import apply as ap
 class ApplyDialog(QDialog):
     """Shows every file that will be written. Result: 'apply', 'dry' or rejected."""
 
-    def __init__(self, batches, card, backup_root, full_backup, parent=None):
+    def __init__(self, batches, card, backup_root, full_backup, edit_plan=None, parent=None):
         super().__init__(parent)
         self.choice = None
         label = card.facts.label or card.root
+        imports = [b for b in batches if getattr(b, "kind", "import") != "edit"]
         n = sum(len(b.active) for b in batches)
         self.setWindowTitle(f"Apply {n} change{'s' if n != 1 else ''} to {label}")
         self.resize(980, 560)
@@ -22,19 +23,30 @@ class ApplyDialog(QDialog):
         text = []
         for k, b in enumerate(batches, 1):
             text.append(f"{k}  {b.summary()}")
+            if b not in imports:
+                continue
             for i in b.active:
                 text.append(f"      {i.card_rel}")
                 text.append(f"          from {i.src}   ({i.note})")
                 if i.copy_original:
                     text.append(f"          original kept in the library as {i.library_rel}")
+        if edit_plan is not None:
+            text += ["", "CHANGES TO FILES ALREADY ON THE CARD"] + edit_plan.lines()
+            if edit_plan.problems:
+                text = ["CAN'T APPLY — fix these first (remove the change from Pending):"] + \
+                       [f"  ✗ {x}" for x in edit_plan.problems] + [""] + text
         box = QPlainTextEdit("\n".join(text))
         box.setReadOnly(True)
         box.setStyleSheet("font-family:Consolas,monospace;")
         lay.addWidget(box, 1)
         what = "a list of every file on the card" + (" and a zip of every preset and song" if full_backup else "")
+        if edit_plan is not None and edit_plan.xml:
+            what += f", plus a copy of the {len(edit_plan.xml)} preset and song files that change"
+        after = "re-read every new and changed file and check every rewritten path points at a real file."
         lay.addWidget(QLabel(f"<span style='color:#065f46'>Before writing: back up {what} to {backup_root}.<br/>"
-                             "After writing: re-read each new file and check the Deluge will play it.<br/>"
-                             "Nothing already on the card is changed — an import only adds files.</span>"))
+                             f"After writing: {after}<br/>"
+                             "Only the sample path inside each preset changes — every other byte stays as the Deluge "
+                             "wrote it.</span>"))
         warn = QLabel("<b>Don't remove the card until this finishes.</b> Undo is in History afterwards.")
         warn.setStyleSheet("background:#fff7ed;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         lay.addWidget(warn)
@@ -46,6 +58,8 @@ class ApplyDialog(QDialog):
             row.addWidget(b)
             if choice == "apply":
                 b.setDefault(True)
+            if choice and edit_plan is not None and edit_plan.problems:
+                b.setEnabled(False)
         lay.addLayout(row)
 
     def _pick(self, c):
@@ -106,18 +120,26 @@ class HistoryDialog(QDialog):
         if j.created_library:
             lines += ["", "Originals copied into the library:"] + [f"  {x}" for x in j.created_library]
         self.detail.setPlainText("\n".join(lines))
-        self.undo_btn.setEnabled(not j.undone and bool(j.created_card))
+        self.undo_btn.setEnabled(not j.undone and bool(j.created_card or j.moved or j.trashed or j.xml_backups))
 
     def _undo(self):
         j = self._journal()
         card = self.main.card
         if not j or not card:
             return
-        if QMessageBox.question(self, "Undo", f"Move the {len(j.created_card)} files this change added into the card's "
-                                "DSM_TRASH folder, and the originals it copied into the library's _DSM/trash folder?") \
-                != QMessageBox.Yes:
+        if j.kind == "edit":
+            q = (f"Put back {len(j.moved)} moved and {len(j.trashed)} trashed files, and restore the "
+                 f"{len(j.xml_backups)} preset and song files from the backup?")
+        else:
+            q = (f"Move the {len(j.created_card)} files this change added into the card's DSM_TRASH folder, "
+                 "and the originals it copied into the library's _DSM/trash folder?")
+        if QMessageBox.question(self, "Undo", q) != QMessageBox.Yes:
             return
-        problems = ap.undo(j, card, self.main.settings["library_root"], self.main.mapping)
+        if j.kind == "edit":
+            from dsm.edit import edits as ed
+            problems = ed.undo(j, card, self.main.mapping)
+        else:
+            problems = ap.undo(j, card, self.main.settings["library_root"], self.main.mapping)
         if problems:
             QMessageBox.warning(self, "Undo", "\n".join(problems))
         self._fill()

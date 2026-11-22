@@ -35,6 +35,12 @@ class Journal:
     undone: bool = False
     dry_run: bool = False
     log: list[str] = field(default_factory=list)
+    kind: str = "import"                                          # import or edit
+    moved: list = field(default_factory=list)                     # edit: [old_rel, new_rel] file moves
+    trashed: list = field(default_factory=list)                   # edit: [rel, trash_rel]
+    xml_backups: list = field(default_factory=list)               # edit: [xml_rel, backup file path]
+    xml_after: dict = field(default_factory=dict)                 # edit: xml_rel -> sha1 written
+    mapping_moves: list = field(default_factory=list)             # edit: [old_card_rel, new_card_rel]
 
     def save(self):
         d = journal_dir()
@@ -54,7 +60,8 @@ def history() -> list[Journal]:
         if fn.endswith(".json"):
             try:
                 with open(os.path.join(journal_dir(), fn), encoding="utf-8") as f:
-                    out.append(Journal(**json.load(f)))
+                    d = json.load(f)
+                out.append(Journal(**{k: v for k, v in d.items() if k in Journal.__dataclass_fields__}))
             except (OSError, ValueError, TypeError):
                 pass
     return out

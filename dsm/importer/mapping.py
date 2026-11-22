@@ -55,6 +55,15 @@ class Mapping:
     def remove_card(self, card_rel: str, serial: str = ""):
         self.links = [x for x in self.links if not (x.card.lower() == card_rel.lower() and x.card_serial == serial)]
 
+    def move_card(self, old: str, new: str) -> bool:
+        """A card file was renamed or moved: follow it. Returns True if a link changed."""
+        changed = False
+        for x in self.links:
+            if x.card.lower() == old.lower():
+                x.card = new
+                changed = True
+        return changed
+
     def for_card(self, card_rel: str) -> Link | None:
         for x in self.links:
             if x.card.lower() == card_rel.lower():
