@@ -85,7 +85,9 @@ def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pa
             in_pack = "/".join(parts[3:]) if len(parts) > 3 else parts[-1]
         dest = card_path(b.source, vendor, pack, src, in_pack)
         item = ImportItem(src=src, card_rel=dest, library_rel=lib_rel, copy_original=copy, info=info)
-        if info.error:
+        if b.source == "FACTORY":
+            item.skip = "factory samples are locked — they come from Initialize Factory Samples"
+        elif info.error:
             item.skip = f"can't read: {info.error}"
         else:
             for link in mapping.for_library(lib_rel):

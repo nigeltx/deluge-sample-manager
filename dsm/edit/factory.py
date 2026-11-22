@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -56,6 +57,33 @@ class FactoryRecord:
         d = json.loads(text)
         d["entries"] = [Entry(**e) for e in d.get("entries", [])]
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+def is_factory_card(rel: str) -> bool:
+    """Factory samples live under SAMPLES/FACTORY once the card is initialized; they are locked."""
+    return rel.upper().startswith(PREFIX)
+
+
+def is_factory_library(rel: str) -> bool:
+    return rel.replace("\\", "/").upper().startswith("FACTORY/")
+
+
+def origin(rel: str, on_card: bool = True) -> str:
+    """Factory, Free, Paid, Deluge (the Deluge's own folders) or Other, from a card or library path."""
+    parts = rel.replace("\\", "/").split("/")
+    top = (parts[1] if on_card and len(parts) > 2 else parts[0] if not on_card else "").upper()
+    if top in ("FACTORY", "FREE", "PAID"):
+        return top.title()
+    if on_card and top in ("CLIPS", "RECORD", "RESAMPLE", "EXPORTS"):
+        return "Deluge"
+    return "Other"
+
+
+def record_from_existing(card, journal_id: str = "") -> "FactoryRecord":
+    """For a card whose factory samples are already under SAMPLES/FACTORY but has no record yet: their original
+    place was the same path without FACTORY/."""
+    moved = [("SAMPLES/" + v[len(PREFIX):], v) for k, v in sorted(card.files.items()) if k.startswith(PREFIX.lower())]
+    return make(card, moved, journal_id)
 
 
 def library_copy_path(card_rel: str) -> str:
@@ -155,7 +183,10 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
                 os.remove(tmp)
                 out["problems"].append(f"Size changed while copying: {e.card}")
                 continue
+            if os.path.exists(dst):                       # a stale copy: unlock it so it can be replaced
+                os.chmod(dst, stat.S_IWRITE | stat.S_IREAD)
             os.replace(tmp, dst)
+            os.chmod(dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)   # locked: read-only
             e.sha1, e.library = h.hexdigest(), dst_rel
             if mapping is not None:
                 mapping.add(Link(card=e.card, library=dst_rel, card_serial=card.facts.serial,

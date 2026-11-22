@@ -22,6 +22,7 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 ## Rules
 - M1–M2 were read-only; M3 adds files; M4 (current) moves, renames, relinks and trashes existing card files and rewrites preset paths.
 - Every card read or write goes through the Card methods (read_bytes, write_bytes, put_file, move, stat, inspect …), never open()/os calls on card.abs(), so the reader and USB backends both work.
+- Factory samples are LOCKED: nothing may rename, move, trash or write into SAMPLES/FACTORY except Initialize Factory Samples (EditBatch.factory=True); library FACTORY copies are read-only. Import offers Free and Paid only.
 - Never delete a card file: removals go to DSM_TRASH. Undo restores preset files from the per-apply backup, but never over a preset the Deluge has saved again since.
 - The library keeps originals only; the card gets converted copies; `_DSM/mapping.json` in the library root links them.
 - When writes arrive (M3+), every write goes through the pending tray, backup, atomic write, verify, journal.

@@ -113,7 +113,15 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
     card = idx.card
     p = EditPlan()
     moves: dict[str, str] = {}
+    from dsm.edit.factory import is_factory_card
     for b in batches:
+        if not b.factory:
+            for old, new in b.moves:
+                if is_factory_card(old) or is_factory_card(new):
+                    p.problems.append(f"Factory samples are locked: {old if is_factory_card(old) else new}")
+            for t in b.trash:
+                if is_factory_card(t):
+                    p.problems.append(f"Factory samples are locked: {t}")
         for old, new in b.moves:
             if old.lower() not in card.files:
                 p.problems.append(f"Not on the card any more: {old}")

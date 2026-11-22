@@ -55,14 +55,14 @@ def test_rename_rewrites_only_path_bytes_and_undo_restores(env):
 
 def test_folder_move_and_ampersand(env):
     card, idx, m, bk = env
-    b = ed.folder_move(card, "SAMPLES/FACTORY/SYNTHS", "SAMPLES/FACTORY/PADS & CHOIRS")
+    b = ed.folder_move(card, "SAMPLES/PAID/MARS/808/DRUMS/SNARE", "SAMPLES/PAID/MARS/808/DRUMS/SNARE & CLAP")
     p = ed.plan([b], idx)
     assert not p.problems
     ed.apply(p, [b], card, m, bk, False)
-    data = open(card.abs("SYNTHS/CHOIR PAD.XML"), encoding="utf-8").read()
-    assert "<fileName>SAMPLES/FACTORY/PADS &amp; CHOIRS/PAD &amp; CHOIR.WAV</fileName>" in data
-    assert build_index(card).uses("SAMPLES/FACTORY/PADS & CHOIRS/PAD & CHOIR.WAV")
-    assert not os.path.isdir(card.abs("SAMPLES/FACTORY/SYNTHS"))      # emptied folder removed
+    data = open(card.abs("KITS/PSY KIT 1.XML"), encoding="utf-8").read()
+    assert 'fileName="SAMPLES/PAID/MARS/808/DRUMS/SNARE &amp; CLAP/SD_808_01.WAV"' in data
+    assert build_index(card).uses("SAMPLES/PAID/MARS/808/DRUMS/SNARE & CLAP/SD_808_01.WAV")
+    assert not os.path.isdir(card.abs("SAMPLES/PAID/MARS/808/DRUMS/SNARE"))      # emptied folder removed
 
 
 def test_relink_missing(env):

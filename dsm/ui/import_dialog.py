@@ -38,12 +38,12 @@ class ImportDialog(QDialog):
         grid.addWidget(QLabel("Source"), 0, 0)
         self.src_group = QButtonGroup(self)
         srow = QHBoxLayout()
-        for s in SOURCES:
+        for s in ("FREE", "PAID"):            # factory samples come only from Initialize Factory Samples
             rb = QRadioButton(s.title())
             rb.setProperty("source", s)
             self.src_group.addButton(rb)
             srow.addWidget(rb)
-            if s == (g_source or "PAID"):
+            if s == (g_source if g_source in ("FREE", "PAID") else "PAID"):
                 rb.setChecked(True)
         self.src_hint = QLabel("" if g_source else "← choose: did it cost money?")
         self.src_hint.setStyleSheet("color:#9a3412;")

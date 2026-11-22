@@ -61,6 +61,8 @@ class MainWindow(QMainWindow):
         self.mapping = Mapping(settings["library_root"])
         self.pending = []            # ImportBatch list — nothing written until Apply
         self.backed_up_this_session = False
+        self.factory_rec = None
+        self._offered_init = set()
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1400, 860)
@@ -96,10 +98,11 @@ class MainWindow(QMainWindow):
         h.setToolTip("Every change made to a card, with Undo")
         h.triggered.connect(lambda: HistoryDialog(self, self).exec())
         tb.addAction(h)
-        self.factory_act = QAction("Factory move…", self)
-        self.factory_act.setToolTip("Move the factory samples under SAMPLES/FACTORY and update every preset")
+        self.factory_act = QAction("Initialize Factory Samples", self)
+        self.factory_act.setToolTip("Move the factory samples under SAMPLES/FACTORY, record them, copy them to the "
+                                    "library and lock them — the first thing to do with a card")
         self.factory_act.setVisible(False)
-        self.factory_act.triggered.connect(self._factory_dialog)
+        self.factory_act.triggered.connect(self._initialize_factory)
         tb.addAction(self.factory_act)
         self.record_act = QAction("Factory record", self)
         self.record_act.setToolTip("The record of the factory samples, and their copy in the library")
@@ -168,8 +171,8 @@ class MainWindow(QMainWindow):
         self.warn.setStyleSheet("background:#fbe6d6;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         self.warn.hide()
         ml.addWidget(self.warn)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Name", "Length", "kHz/bit", "Used", "Deluge"])
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(["Name", "Origin", "On card", "Length", "kHz/bit", "Used", "Deluge"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -179,7 +182,7 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(True)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
-        for c in range(1, 5):
+        for c in range(1, 7):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.currentCellChanged.connect(lambda r, *_: self._row_select(r))
         self.table.installEventFilter(self)
@@ -376,12 +379,12 @@ class MainWindow(QMainWindow):
             self.warn.hide()
         self.health_act.setEnabled(True)
         self.import_act.setEnabled(True)
-        folders, loose = ed.factory_candidates(self.card)
-        self.factory_act.setVisible(bool(folders or loose))
         self.factory_rec = factory.load(self.settings["library_root"], self.card)
         if self.factory_rec and self.factory_rec.undone:
             self.factory_rec = None
         self.record_act.setVisible(self.factory_rec is not None)
+        self.factory_act.setVisible(self.factory_rec is None)
+        QTimer.singleShot(400, self._maybe_offer_initialize)
         self._build_card_tree()
 
     # ------------------------------------------------------------------ tree
@@ -396,6 +399,8 @@ class MainWindow(QMainWindow):
             self.tree.insertTopLevelItem(0, root)
             items = {}
             for d in sorted(self.card.dirs, key=lambda s: s.lower()):
+                if d.split("/")[0].upper() == "DSM":          # the app's own data folder on the card
+                    continue
                 parent = items.get(d.rsplit("/", 1)[0]) if "/" in d else root
                 it = QTreeWidgetItem([d.rsplit("/", 1)[-1]])
                 it.setData(0, Qt.UserRole, ("card", d))
@@ -433,7 +438,8 @@ class MainWindow(QMainWindow):
             return
         item.takeChild(0)
         try:
-            subs = sorted((e for e in os.scandir(path) if e.is_dir() and not e.name.startswith(".")),
+            subs = sorted((e for e in os.scandir(path) if e.is_dir() and not e.name.startswith(".")
+                           and e.name != "_DSM"),          # the app's own data folder
                           key=lambda e: e.name.lower())
         except OSError as e:
             item.addChild(QTreeWidgetItem([f"(can't read: {e.strerror})"]))
@@ -520,13 +526,32 @@ class MainWindow(QMainWindow):
         for i, row in enumerate(rows):
             it = QTableWidgetItem(row["name"])
             it.setData(Qt.UserRole, i)          # index into self.rows (Qt would copy a dict)
+            on_card = self._on_card(row)
+            row["on_card"] = on_card
+            if on_card:
+                it.setForeground(GREEN)
+                f = it.font()
+                f.setBold(True)
+                it.setFont(f)
+                it.setToolTip("On the Deluge's card" + (f": {on_card}" if isinstance(on_card, str) else ""))
             self.table.setItem(i, 0, it)
+            org = self._origin(row)
+            row["origin"] = org
+            o = QTableWidgetItem(("🔒 " if org == "Factory" else "") + org)
+            if org == "Factory":
+                o.setForeground(QColor("#1d4ed8"))
+                o.setToolTip("Factory sample — locked: it can't be renamed, moved, trashed or overwritten")
+            self.table.setItem(i, 1, o)
+            oc = QTableWidgetItem("✓" if on_card else "")
+            oc.setForeground(GREEN)
+            oc.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 2, oc)
             used = len(self.index.uses(row["rel"])) if row["where"] == "card" and self.index else None
             u = QTableWidgetItem()
             if used is not None:
                 u.setData(Qt.DisplayRole, used)
-            self.table.setItem(i, 3, u)
-            for c in (1, 2, 4):
+            self.table.setItem(i, 5, u)
+            for c in (3, 4, 6):
                 self.table.setItem(i, c, QTableWidgetItem("…"))
         self.table.setSortingEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
@@ -559,11 +584,11 @@ class MainWindow(QMainWindow):
                 continue
             ln = QTableWidgetItem(f"{info.seconds:.2f}s")
             ln.setData(Qt.UserRole + 1, info.seconds)
-            self.table.setItem(r, 1, ln)
+            self.table.setItem(r, 3, ln)
             fmt = QTableWidgetItem(info.short_format())
             if info.rate and info.rate != 44100:
                 fmt.setForeground(AMBER)
-            self.table.setItem(r, 2, fmt)
+            self.table.setItem(r, 4, fmt)
             if not info.deluge_plays:
                 st, col = "won't play", RED
                 bad += 1
@@ -574,7 +599,7 @@ class MainWindow(QMainWindow):
                 st, col = "native", GREEN
             s = QTableWidgetItem(st)
             s.setForeground(col)
-            self.table.setItem(r, 4, s)
+            self.table.setItem(r, 6, s)
         self.table.setSortingEnabled(True)
         bits = [f"{title} · {len(infos)} file{'s' if len(infos) != 1 else ''}"]
         if bad:
@@ -590,6 +615,39 @@ class MainWindow(QMainWindow):
                 self._row_select(self.table.currentRow())
             else:
                 self._show_info(row)
+
+    def _lib_rel(self, path):
+        lib = self.settings["library_root"]
+        try:
+            rel = os.path.relpath(path, lib).replace(os.sep, "/")
+        except ValueError:
+            return None
+        return None if rel.startswith("..") else rel
+
+    def _origin(self, row) -> str:
+        if row["where"] == "card":
+            return factory.origin(row["rel"], on_card=True)
+        rel = self._lib_rel(row["abs"])
+        return factory.origin(rel, on_card=False) if rel else "Other"
+
+    def _on_card(self, row):
+        """True (or the card path) when this sample is on the Deluge's card."""
+        if row["where"] == "card":
+            return True
+        if not self.card:
+            return False
+        rel = self._lib_rel(row["abs"])
+        if not rel:
+            return False
+        for link in self.mapping.for_library(rel):
+            if link.card.lower() in self.card.files:
+                return link.card
+        rec = getattr(self, "factory_rec", None)
+        if rec:
+            for e in rec.entries:
+                if e.library and e.library.lower() == rel.lower() and e.card.lower() in self.card.files:
+                    return e.card
+        return False
 
     def _row_at(self, r):
         it = self.table.item(r, 0)
@@ -790,7 +848,7 @@ class MainWindow(QMainWindow):
                 dlg.show_path.connect(lambda p: (self.select_card_path(p)))
                 dlg.relink.connect(lambda old, new: self._add_edit(ed.EditBatch(
                     f"Relink {old.rsplit('/', 1)[-1]} → {new}", relinks=[(old, new)])))
-                dlg.factory.connect(self._factory_dialog)
+                dlg.factory.connect(self._initialize_factory)
                 dlg.show()
         run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
 
@@ -882,6 +940,11 @@ class MainWindow(QMainWindow):
         acts = {}
         if lib_rows:
             acts[m.addAction(f"Send {len(lib_rows)} to the card…")] = "send"
+        locked = [r for r in card_rows if factory.is_factory_card(r["rel"])]
+        if locked:
+            a = m.addAction(f"🔒 {len(locked)} factory sample{'s are' if len(locked) != 1 else ' is'} locked")
+            a.setEnabled(False)
+        card_rows = [r for r in card_rows if not factory.is_factory_card(r["rel"])]
         if card_rows and self.index:
             if len(card_rows) == 1:
                 acts[m.addAction("Rename…")] = "rename"
@@ -905,6 +968,12 @@ class MainWindow(QMainWindow):
     def _tree_menu(self, pos):
         it = self.tree.itemAt(pos)
         d = it.data(0, Qt.UserRole) if it else None
+        if d and d[0] == "card" and (d[1].upper() + "/").startswith("SAMPLES/FACTORY/"):
+            m = QMenu(self)
+            a = m.addAction("🔒 Factory samples are locked")
+            a.setEnabled(False)
+            m.exec(self.tree.viewport().mapToGlobal(pos))
+            return
         if d and d[0] == "card" and d[1].upper().startswith("SAMPLES/") and self.index:
             m = QMenu(self)
             ren = m.addAction("Rename folder…")
@@ -939,7 +1008,8 @@ class MainWindow(QMainWindow):
         self.status_lbl.setText(f"Added to Pending: {batch.title}" + (f" — {refs} preset references will follow" if refs else ""))
 
     def _sample_dirs(self):
-        return sorted((d for d in self.card.dirs if d.upper().startswith("SAMPLES")), key=str.lower)
+        return sorted((d for d in self.card.dirs if d.upper().startswith("SAMPLES")
+                       and not (d.upper() + "/").startswith("SAMPLES/FACTORY/")), key=str.lower)
 
     def _rename_file(self, rel):
         folder, name = rel.rsplit("/", 1)
@@ -1064,24 +1134,27 @@ class MainWindow(QMainWindow):
         lay.addWidget(bb)
         dlg.exec()
 
-    def _factory_dialog(self):
-        if not self.card or not self.index:
-            return
-        folders, loose = ed.factory_candidates(self.card)
-        if not folders and not loose:
-            QMessageBox.information(self, APP_NAME, "Nothing to move: every folder in SAMPLES is already in "
-                                    "FREE, FACTORY, PAID or one of the Deluge's own folders.")
-            return
+    def _choose_factory_folders(self, folders, loose, existing):
+        """The Initialize dialog: which folders are factory. Returns (folders, loose) or None."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Move the factory library under SAMPLES/FACTORY")
-        dlg.resize(640, 560)
+        dlg.setWindowTitle("Initialize Factory Samples")
+        dlg.resize(680, 600)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("These are the folders in SAMPLES that aren't in FREE, FACTORY or PAID. On a card that came "
-                             "from the factory they are all factory samples. Untick anything that is yours — it stays "
-                             "where it is and you can file it later.<br/><br/>Every kit, synth and song that uses a moved "
-                             "sample is updated to the new path.<br/><br/>A <b>factory record</b> is made at the same time: every factory "
-                             "sample's original path, new path and size, saved in the library and on the card. Then "
-                             "you can copy the factory samples themselves, untouched, into the library's FACTORY folder."))
+        usb = self.card.is_usb
+        intro = QLabel(
+            "<b>Run this once, as the first thing you do with a card.</b> It does three things:<br/>"
+            "1. Moves the factory samples under <b>SAMPLES/FACTORY</b>, and updates every kit, synth and song that uses "
+            "them.<br/>"
+            "2. Makes the <b>factory record</b>: every factory sample's original path, new path and size, saved in the "
+            "library and on the card.<br/>"
+            "3. Copies every factory sample, untouched and read-only, into the library's FACTORY folder, with a "
+            "checksum." + (" <span style='color:#9a3412'>(Over USB this step waits for the card reader.)</span>"
+                           if usb else "") +
+            "<br/><br/>From then on factory samples are <b>locked</b>: they can't be renamed, moved, trashed or "
+            "overwritten.<br/><br/>These are the folders in SAMPLES outside FREE and PAID. On a card that came from "
+            "the factory they are all factory samples. Untick anything that is yours.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
         lst = QListWidget()
         for f in folders:
             n = sum(1 for k in self.card.files if k.startswith(f"samples/{f.lower()}/"))
@@ -1096,18 +1169,23 @@ class MainWindow(QMainWindow):
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked)
             lst.addItem(it)
+        if existing:
+            it = QListWidgetItem(f"{len(existing)} already in SAMPLES/FACTORY — recorded and copied as they are")
+            it.setFlags(Qt.ItemIsEnabled)
+            lst.addItem(it)
         lay.addWidget(lst, 1)
         info = QLabel()
         lay.addWidget(info)
         bb = QDialogButtonBox()
-        ok_btn = bb.addButton("Add to pending", QDialogButtonBox.AcceptRole)
+        ok_btn = bb.addButton("Continue…", QDialogButtonBox.AcceptRole)
         bb.addButton(QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
 
         def chosen():
-            fs = [lst.item(i).data(Qt.UserRole) for i in range(lst.count()) if lst.item(i).checkState() == Qt.Checked]
+            fs = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                  if lst.item(i).flags() & Qt.ItemIsUserCheckable and lst.item(i).checkState() == Qt.Checked]
             return [f for f in fs if f], (loose if None in fs else [])
 
         def update(*_):
@@ -1115,15 +1193,108 @@ class MainWindow(QMainWindow):
             b = ed.factory_move(self.card, fs, ls)
             p = ed.plan([b], self.index)
             info.setText(f"<b>{len(p.moves)}</b> files move · <b>{len(p.xml)}</b> preset and song files change "
-                         f"({p.ref_count} references)" + ("" if not p.problems else
-                                                          f"<br/><span style='color:#b91c1c'>{p.problems[0]}</span>"))
-            ok_btn.setEnabled(bool(p.moves) and not p.problems)
+                         f"({p.ref_count} references) · <b>{len(p.moves) + len(existing)}</b> factory samples recorded"
+                         + ("" if not p.problems else f"<br/><span style='color:#b91c1c'>{p.problems[0]}</span>"))
+            ok_btn.setEnabled(bool(p.moves or existing) and not p.problems)
         lst.itemChanged.connect(update)
         update()
-        self._factory_preview = dlg
-        if dlg.exec():
-            fs, ls = chosen()
-            self._add_edit(ed.factory_move(self.card, fs, ls))
+        return chosen() if dlg.exec() else None
+
+    def _initialize_factory(self):
+        if not self.card or not self.index:
+            return
+        if self.pending:
+            QMessageBox.information(self, APP_NAME, "Apply or remove the pending changes first, then initialize.")
+            return
+        lib = self.settings["library_root"]
+        rec = factory.load(lib, self.card)
+        if rec and not rec.undone:
+            QMessageBox.information(self, APP_NAME, "This card's factory samples are already initialized.")
+            self._record_dialog()
+            return
+        folders, loose = ed.factory_candidates(self.card)
+        existing = [v for k, v in self.card.files.items() if k.startswith("samples/factory/")]
+        if not folders and not loose and not existing:
+            QMessageBox.information(self, APP_NAME, "No factory samples found: SAMPLES has nothing outside FREE and PAID.")
+            return
+        pick = self._choose_factory_folders(folders, loose, existing)
+        if pick is None:
+            return
+        fs, ls = pick
+        batch = ed.factory_move(self.card, fs, ls)
+        p = ed.plan([batch], self.index)
+        backup_root = self.settings.get("backup_root") or os.path.join(app_dir(), "Backups")
+        full = not self.backed_up_this_session
+        if batch.moves:
+            dlg = ApplyDialog([batch], self.card, backup_root, full, p, self)
+            if not dlg.exec() or dlg.choice != "apply":
+                if dlg.choice == "dry":
+                    box = QMessageBox(QMessageBox.Information, "Dry run", "Nothing was written. This is what would move:")
+                    box.setDetailedText("\n".join(p.lines(limit_per_xml=1000)))
+                    box.exec()
+                return
+        card, mapping = self.card, self.mapping
+        lib_ok = bool(lib and os.path.isdir(lib))
+
+        def work(progress):
+            moved, jid = [], ""
+            if batch.moves:
+                j = ed.apply(p, [batch], card, mapping, backup_root, full, progress=progress)
+                moved, jid = [tuple(x) for x in j.moved], j.id
+            moved_new = {n.lower() for _, n in moved}
+            moved += [("SAMPLES/" + v[len("SAMPLES/FACTORY/"):], v) for v in existing if v.lower() not in moved_new]
+            rec = factory.make(card, moved, jid)
+            problems = factory.save(rec, lib if lib_ok else None, card)
+            copy = None
+            if lib_ok and not card.is_usb:
+                copy = factory.copy_to_library(rec, card, lib, mapping, progress=progress)
+            return rec, problems, copy
+
+        def done(res):
+            rec, problems, copy = res
+            self.prog.hide()
+            self.backed_up_this_session = True
+            self.factory_rec = rec
+            lines = [f"{len(rec.entries)} factory samples are under SAMPLES/FACTORY and recorded."]
+            if copy:
+                lines.append(f"{copy['copied'] + copy['skipped']} copied untouched into the library's FACTORY folder "
+                             "(read-only, with checksums).")
+                problems = problems + copy["problems"]
+            elif self.card.is_usb:
+                lines.append("The copy into the library waits for the card reader: use Factory record → Copy.")
+            elif not lib_ok:
+                lines.append("The library folder isn't reachable, so nothing was copied yet: check Settings, then use "
+                             "Factory record → Copy.")
+            lines.append("Factory samples are now locked. Undo is in History.")
+            box = QMessageBox(QMessageBox.Warning if problems else QMessageBox.Information, "Factory samples initialized",
+                              "\n\n".join(lines))
+            if problems:
+                box.setDetailedText("\n".join(problems))
+            box.exec()
+            self._build_library_root()
+            self._refresh()
+
+        def failed(msg):
+            self.prog.hide()
+            QMessageBox.warning(self, "Initialize stopped", f"{msg}\n\nThe card was put back as it was.")
+            self._refresh()
+        run_job(Job(work, wants_progress=True), done=done, failed=failed, progress=self._progress)
+
+    def _maybe_offer_initialize(self):
+        """First thing on a card that hasn't been initialized: offer it once per card per session."""
+        key = (self.card.root, self.card.facts.serial)
+        if key in self._offered_init or self.factory_rec is not None or self.pending:
+            return
+        folders, loose = ed.factory_candidates(self.card)
+        existing = any(k.startswith("samples/factory/") for k in self.card.files)
+        if not (folders or loose or existing):
+            return
+        self._offered_init.add(key)
+        if QMessageBox.question(self, "Initialize Factory Samples",
+                                "This card's factory samples haven't been initialized yet.\n\nInitialize them now? "
+                                "This moves them under SAMPLES/FACTORY, records them, copies them into the library, "
+                                "and locks them. You see everything before it happens.") == QMessageBox.Yes:
+            self._initialize_factory()
 
     def _start_import(self, files):
         if not self.card:

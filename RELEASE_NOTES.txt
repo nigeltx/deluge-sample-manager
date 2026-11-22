@@ -1,20 +1,19 @@
-Factory record. Version 0.5.0.
+Factory lock and Initialize Factory Samples. Version 0.6.0.
 
 Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.
 Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
 
 New
-- The Factory move now makes a factory record: every factory sample's original path, its new path under
-  SAMPLES/FACTORY, its size and date. It is saved in the library (_DSM/factory-record.json, synced
-  with Drive) and on the card (DSM/FACTORY_RECORD.JSON, outside SAMPLES so the Deluge never shows it).
-- Straight after the move (with the card in the reader) the app offers to copy every factory sample,
-  untouched, into the library's FACTORY folder, with a checksum for each in the record. Over USB the
-  record is made at once and the copy waits for the card reader (it would take far too long over USB).
-- Factory record (toolbar): what the record holds, how many are copied, anything missing or changed,
-  and a button to copy whatever isn't copied yet. Running it again skips what's already done.
-- The info panel shows "Factory sample — originally SAMPLES/…" and where its untouched copy is.
-- Health check: a Factory samples section lists any factory sample missing from the card or no longer
-  the size the factory made it.
-- Undoing the factory move marks the record as undone.
+- Initialize Factory Samples (toolbar) replaces "Factory move". Run it once, first: it moves the factory
+  samples under SAMPLES/FACTORY (updating every kit, synth and song), makes the factory record, and copies
+  every factory sample untouched into the library's FACTORY folder with a checksum. You see the folder
+  list and every change before anything happens. Over USB the copy waits for the card reader.
+- When a card that hasn't been initialized is opened, the app offers to initialize it.
+- Factory samples are locked: the app won't rename, move, trash or write over them, nothing can be
+  imported into SAMPLES/FACTORY (Import now offers Free and Paid only), and the library copies are
+  read-only. Right-click shows "🔒 locked" instead of the actions.
+- New Origin column on every sample: 🔒 Factory, Free, Paid, or Deluge (its own folders).
+- Samples that are on the Deluge's card show their name in bold green, with a ✓ in the new On card
+  column — in the library too, so you can see which originals are already on the card.
 
 If something goes wrong, use the Log folder button and send the dsm.log file.

@@ -73,3 +73,34 @@ def test_record_over_usb(tmp_path, monkeypatch):
     assert os.path.exists(os.path.join(root, "DSM", "FACTORY_RECORD.JSON"))
     assert factory.load(None, c).entries
     assert factory.copy_to_library(rec, c, lib, m)["copied"] == 2
+
+
+def test_factory_locks(card, tmp_path):
+    rec, lib, m, j = _factory_move(card, tmp_path)
+    idx = build_index(card)
+    fk = "SAMPLES/FACTORY/OLDSTUFF/KICKS/kick_unused.wav"
+    for b in (ed.EditBatch("r", moves=[(fk, fk.replace("kick_unused", "x"))]),
+              ed.EditBatch("t", trash=[fk]),
+              ed.EditBatch("in", moves=[("SAMPLES/FREE/MINE/PS01/MOVED_AWAY.WAV", "SAMPLES/FACTORY/X.WAV")]),
+              ed.folder_move(card, "SAMPLES/FACTORY/OLDSTUFF", "SAMPLES/FREE/OLDSTUFF")):
+        assert any("locked" in p for p in ed.plan([b], idx).problems)
+    from dsm.importer.convert import Profile
+    from dsm.importer.plan import build_plan
+    from tests.fixture import write_wav
+    src = str(tmp_path / "x.wav")
+    write_wav(src)
+    plan = build_plan([(src, None)], "FACTORY", "", "", Profile(), card, lib, m)
+    assert plan.items[0].skip and "locked" in plan.items[0].skip
+    factory.copy_to_library(rec, card, lib, m)
+    copy = os.path.join(lib, "FACTORY", "OLDSTUFF", "KICKS", "kick_unused.wav")
+    import stat
+    assert not os.stat(copy).st_mode & stat.S_IWUSR
+
+
+def test_origin_and_existing_record(card, tmp_path):
+    assert factory.origin("SAMPLES/FACTORY/DRUMS/K.WAV") == "Factory"
+    assert factory.origin("SAMPLES/PAID/X/Y/K.WAV") == "Paid"
+    assert factory.origin("SAMPLES/CLIPS/R.WAV") == "Deluge"
+    assert factory.origin("FREE/V/P/k.wav", on_card=False) == "Free"
+    rec = factory.record_from_existing(card)
+    assert {e.original for e in rec.entries} == {"SAMPLES/SYNTHS/PAD & CHOIR.WAV"}
