@@ -34,6 +34,7 @@ class EditBatch:
     relinks: list[tuple[str, str]] = field(default_factory=list)    # missing path as written -> existing card rel
     trash: list[str] = field(default_factory=list)                  # unused card files to DSM_TRASH
     kind: str = "edit"
+    factory: bool = False                                           # the factory move: makes the factory record
 
     @property
     def active(self):
@@ -68,7 +69,7 @@ def factory_move(card: Card, folders: list[str], loose: list[str]) -> EditBatch:
     moves += [(rel, "SAMPLES/FACTORY/" + rel.split("/", 1)[1]) for rel in loose]
     return EditBatch(f"Move the factory library under SAMPLES/FACTORY ({len(folders)} folder{'s' if len(folders) != 1 else ''}, "
                      f"{len(moves)} file{'s' if len(moves) != 1 else ''})",
-                     moves=moves)
+                     moves=moves, factory=True)
 
 
 # ------------------------------------------------------------------ plan
@@ -309,7 +310,7 @@ def _rollback(j: Journal, card: Card) -> list[str]:
     return problems
 
 
-def undo(j: Journal, card: Card, mapping) -> list[str]:
+def undo(j: Journal, card: Card, mapping, library_root: str | None = None) -> list[str]:
     """Put back an edit: preset and song files restored from the backup, files moved back.
     A preset changed on the Deluge since is not overwritten; it is reported instead."""
     if j.card_serial and card.facts.serial and j.card_serial != card.facts.serial:
@@ -325,6 +326,12 @@ def undo(j: Journal, card: Card, mapping) -> list[str]:
     for old, new in j.mapping_moves:
         mapping.move_card(new, old)
     mapping.save()
+    if library_root is not None or card.exists("DSM/FACTORY_RECORD.JSON"):
+        from dsm.edit import factory
+        rec = factory.load(library_root, card)
+        if rec and rec.journal_id == j.id and not rec.undone:
+            rec.undone = True
+            problems += factory.save(rec, library_root, card)
     j.undone = True
     j.log.append(f"undone {time.strftime('%Y-%m-%d %H:%M')}")
     j.save()

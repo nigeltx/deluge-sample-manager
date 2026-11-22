@@ -146,7 +146,7 @@ class HistoryDialog(QDialog):
             return
         if j.kind == "edit":
             from dsm.edit import edits as ed
-            problems = ed.undo(j, card, self.main.mapping)
+            problems = ed.undo(j, card, self.main.mapping, self.main.settings["library_root"])
         else:
             problems = ap.undo(j, card, self.main.settings["library_root"], self.main.mapping)
         if problems:

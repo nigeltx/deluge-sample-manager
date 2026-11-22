@@ -1,21 +1,20 @@
-USB mode — work on the Deluge's card without taking it out. Version 0.4.0.
+Factory record. Version 0.5.0.
 
 Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.
 Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
 
 New
-- Card list → "Deluge over USB". The app finds the Deluge on its USB cable (Community Firmware 1.3 or
-  later) and reads its card. The app remembers the choice and reconnects next time.
-- Everything works over USB: browsing, Used by, the Health check, Rename / Move / Trash, Relink, the
-  Factory move, Import, History and Undo.
-- Moves and renames happen on the Deluge itself, so they are instant. Copying sample data runs at about
-  30 KB/s (about 35 seconds per MB): the Import and Apply windows show how long, and suggest the card
-  reader for big imports.
-- Samples over 400 KB aren't fetched until you press Play (the waveform shows how long it would take).
-- Preset and song files and sample header facts are kept on the PC after the first read, so the second
-  time the card opens it is quick. Anything changed on the Deluge is read again automatically.
-
-Only one program at a time can use the Deluge's USB ports: close the Patch Manager (or a DAW) first.
-Don't use the Deluge's file browser while Apply is running.
+- The Factory move now makes a factory record: every factory sample's original path, its new path under
+  SAMPLES/FACTORY, its size and date. It is saved in the library (_DSM/factory-record.json, synced
+  with Drive) and on the card (DSM/FACTORY_RECORD.JSON, outside SAMPLES so the Deluge never shows it).
+- Straight after the move (with the card in the reader) the app offers to copy every factory sample,
+  untouched, into the library's FACTORY folder, with a checksum for each in the record. Over USB the
+  record is made at once and the copy waits for the card reader (it would take far too long over USB).
+- Factory record (toolbar): what the record holds, how many are copied, anything missing or changed,
+  and a button to copy whatever isn't copied yet. Running it again skips what's already done.
+- The info panel shows "Factory sample — originally SAMPLES/…" and where its untouched copy is.
+- Health check: a Factory samples section lists any factory sample missing from the card or no longer
+  the size the factory made it.
+- Undoing the factory move marks the record as undone.
 
 If something goes wrong, use the Log folder button and send the dsm.log file.

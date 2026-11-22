@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPu
 from dsm.index.health import HealthReport
 
 SECTIONS = [
+    ("factory", "Factory samples", "Checked against the factory record made at the factory move: samples that are "
+                                   "missing from the card or no longer the size the factory made them."),
     ("missing", "Missing samples", "Presets point at these paths, but no file is there. On the Deluge the preset "
                                    "shows FILE and the row is silent. Suggestions are files with the same name; "
                                    "relinking arrives in milestone M4."),
@@ -35,7 +37,8 @@ class HealthDialog(QDialog):
         self.report = report
         lay = QVBoxLayout(self)
         c = report.counts
-        summary = (f"<b>{c.get('missing', 0)}</b> missing · <b>{c.get('convert', 0)}</b> won't play · "
+        summary = ((f"<b style='color:#b91c1c'>{c['factory']}</b> factory samples missing or changed · "
+                    if c.get("factory") else "") + f"<b>{c.get('missing', 0)}</b> missing · <b>{c.get('convert', 0)}</b> won't play · "
                    f"<b>{c.get('unused_files', 0)}</b> unused · <b>{c.get('xml', 0)}</b> damaged presets · "
                    f"<b>{c.get('name', 0)}</b> naming · <b>{c.get('temp', 0)}</b> leftover takes. "
                    "This check only reads the card — nothing was changed.")

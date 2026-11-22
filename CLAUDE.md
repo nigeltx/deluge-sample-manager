@@ -12,6 +12,7 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - `dsm/index` — XML reference extraction with byte offsets, card index, health check
 - `dsm/importer` — naming rules, conversion profiles, library↔card mapping, plan / apply / undo with journal
 - `dsm/edit` — M4: rename / move / relink / trash of card files, with byte-exact path rewrites in every kit, synth and song; factory move
+- `dsm/edit/factory.py` — the factory record (original path, new path, size, date, SHA-1 once copied) made at the factory move; saved in the library (_DSM/factory-record.json) and on the card (DSM/FACTORY_RECORD.JSON); untouched copies go to LIBRARY/FACTORY/…
 - `dsm/usb` — the Deluge's card over USB (Community Firmware 1.3 SysEx file commands): `link.py` protocol, `usbcard.py` a Card backend with a PC cache of presets and sample headers, `winmm_in.py` big-buffer MIDI input (from the bench test)
 - `dsm/ui` — PySide6 windows; no file logic here
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass

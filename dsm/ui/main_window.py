@@ -20,6 +20,7 @@ from dsm.index.health import check, library_files
 from dsm.index.index import build_index, snippet, unused_samples
 from dsm.logs import log_dir, open_folder
 from dsm.edit import edits as ed
+from dsm.edit import factory
 from dsm.importer import apply as ap
 from dsm.importer.mapping import Mapping
 from dsm.importer.plan import expand
@@ -100,6 +101,11 @@ class MainWindow(QMainWindow):
         self.factory_act.setVisible(False)
         self.factory_act.triggered.connect(self._factory_dialog)
         tb.addAction(self.factory_act)
+        self.record_act = QAction("Factory record", self)
+        self.record_act.setToolTip("The record of the factory samples, and their copy in the library")
+        self.record_act.setVisible(False)
+        self.record_act.triggered.connect(self._record_dialog)
+        tb.addAction(self.record_act)
         s = QAction("Settings", self)
         s.triggered.connect(self._settings_dialog)
         tb.addAction(s)
@@ -372,6 +378,10 @@ class MainWindow(QMainWindow):
         self.import_act.setEnabled(True)
         folders, loose = ed.factory_candidates(self.card)
         self.factory_act.setVisible(bool(folders or loose))
+        self.factory_rec = factory.load(self.settings["library_root"], self.card)
+        if self.factory_rec and self.factory_rec.undone:
+            self.factory_rec = None
+        self.record_act.setVisible(self.factory_rec is not None)
         self._build_card_tree()
 
     # ------------------------------------------------------------------ tree
@@ -759,7 +769,15 @@ class MainWindow(QMainWindow):
         idx, lib = self.index, self.settings["library_root"]
 
         def work(progress):
-            return check(idx, library_files(lib), progress=progress)
+            rep = check(idx, library_files(lib), progress=progress)
+            rec = factory.load(lib, idx.card)
+            if rec and not rec.undone:
+                from dsm.index.health import Finding
+                for kind, text in factory.check(rec, idx.card):
+                    rep.findings.insert(0, Finding("factory", text, "Missing from the card" if kind == "missing" else
+                                                   "Changed since the factory record was made", text.split(" ")[0]))
+                rep.counts["factory"] = len(rep.of("factory"))
+            return rep
 
         def done(rep):
             self.prog.hide()
@@ -826,6 +844,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ import (M3)
     def _link_text(self, row) -> str:
         if row["where"] == "card":
+            rec = getattr(self, "factory_rec", None)
+            e = rec.by_card().get(row["rel"].lower()) if rec else None
+            if e:
+                copy = f" · untouched copy in the library: {e.library}" if e.library else " · not yet copied to the library"
+                return f"Factory sample — originally {e.original}{copy}"
             link = self.mapping.for_card(row["rel"])
             return f"Original in the library: {link.library}" if link else "—"
         lib = self.settings["library_root"]
@@ -962,6 +985,85 @@ class MainWindow(QMainWindow):
         if target:
             self._add_edit(ed.folder_move(self.card, d, f"{target}/{d.rsplit('/', 1)[1]}"))
 
+    def _offer_factory_copy(self, rec):
+        lib = self.settings["library_root"]
+        size = human_size(rec.total_bytes)
+        if not lib or not os.path.isdir(lib):
+            QMessageBox.warning(self, APP_NAME, "The factory record is saved on the card, but the library folder isn't "
+                                "reachable, so the factory samples can't be copied there yet. Check Settings, then use "
+                                "Factory record → Copy.")
+            return
+        if self.card.is_usb:
+            from dsm.usb.usbcard import eta
+            QMessageBox.information(self, "Factory record made",
+                                    f"The record of {len(rec.entries)} factory samples is saved in the library and on "
+                                    f"the card.\n\nCopying the samples themselves ({size}) over USB would take "
+                                    f"{eta(rec.total_bytes)}. Put the card in the reader and use Factory record → "
+                                    "Copy to the library — it takes minutes there.")
+            return
+        if QMessageBox.question(self, "Factory record made",
+                                f"The record of {len(rec.entries)} factory samples is saved in the library and on the "
+                                f"card.\n\nCopy the factory samples themselves ({size}) into the library's FACTORY "
+                                "folder now, untouched, with a checksum for each?") == QMessageBox.Yes:
+            self._copy_factory(rec)
+
+    def _copy_factory(self, rec):
+        card, lib, mapping = self.card, self.settings["library_root"], self.mapping
+
+        def work(progress):
+            return factory.copy_to_library(rec, card, lib, mapping, progress=progress)
+
+        def done(out):
+            self.prog.hide()
+            text = f"{out['copied']} factory samples copied into the library, {out['skipped']} already there."
+            if out["problems"]:
+                box = QMessageBox(QMessageBox.Warning, "Factory copy", text + f"\n{len(out['problems'])} problems.")
+                box.setDetailedText("\n".join(out["problems"]))
+                box.exec()
+            else:
+                QMessageBox.information(self, "Factory copy", text + "\nEvery copy has a checksum in the record.")
+            self.factory_rec = rec
+            self._build_library_root()
+            if self.current:
+                self._show_info(self.current)
+        run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
+
+    def _record_dialog(self):
+        rec = factory.load(self.settings["library_root"], self.card)
+        if not rec:
+            return
+        problems = factory.check(rec, self.card)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Factory record")
+        dlg.resize(820, 520)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            f"Made {rec.made} on {rec.card_label or 'the card'}. <b>{len(rec.entries)}</b> factory samples, "
+            f"{human_size(rec.total_bytes)}.<br/><b>{rec.copied}</b> of them copied untouched into the library "
+            f"(FACTORY folder) with a checksum.<br/>" +
+            (f"<span style='color:#b91c1c'>{len(problems)} missing or changed on the card — see below.</span>"
+             if problems else "<span style='color:#065f46'>Every factory sample is on the card, the size the factory "
+                              "made it.</span>") +
+            "<br/><br/>Saved in the library as _DSM/factory-record.json and on the card as DSM/FACTORY_RECORD.JSON."))
+        box = QPlainTextEdit("\n".join([f"{k.upper():8} {t}" for k, t in problems] + ([""] if problems else []) +
+                                       [f"{e.original}\n    now {e.card}" + (f"\n    copy {e.library}" if e.library else "")
+                                        for e in rec.entries]))
+        box.setReadOnly(True)
+        box.setStyleSheet("font-family:Consolas,monospace;")
+        lay.addWidget(box, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        left = len(rec.entries) - rec.copied
+        if left:
+            b = bb.addButton(f"Copy the {left} remaining to the library", QDialogButtonBox.ActionRole)
+            if self.card.is_usb:
+                from dsm.usb.usbcard import eta
+                rest = sum(e.size for e in rec.entries if not (e.sha1 and e.library))
+                b.setToolTip(f"Over USB this takes {eta(rest)}; with the card reader, minutes.")
+            b.clicked.connect(lambda: (dlg.accept(), self._copy_factory(rec)))
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec()
+
     def _factory_dialog(self):
         if not self.card or not self.index:
             return
@@ -977,7 +1079,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(QLabel("These are the folders in SAMPLES that aren't in FREE, FACTORY or PAID. On a card that came "
                              "from the factory they are all factory samples. Untick anything that is yours — it stays "
                              "where it is and you can file it later.<br/><br/>Every kit, synth and song that uses a moved "
-                             "sample is updated to the new path."))
+                             "sample is updated to the new path.<br/><br/>A <b>factory record</b> is made at the same time: every factory "
+                             "sample's original path, new path and size, saved in the library and on the card. Then "
+                             "you can copy the factory samples themselves, untouched, into the library's FACTORY folder."))
         lst = QListWidget()
         for f in folders:
             n = sum(1 for k in self.card.files if k.startswith(f"samples/{f.lower()}/"))
@@ -1080,6 +1184,7 @@ class MainWindow(QMainWindow):
         card, lib, mapping = self.card, self.settings["library_root"], self.mapping
 
         imports_done = []
+        made_record = []
 
         def work(progress):
             out = []
@@ -1093,8 +1198,13 @@ class MainWindow(QMainWindow):
                 card.scan()
                 idx = build_index(card)
                 p = ed.plan(edits, idx)
-                out.append(ed.apply(p, edits, card, mapping, backup_root, full and not imports, dry_run=dry,
-                                    progress=progress))
+                j = ed.apply(p, edits, card, mapping, backup_root, full and not imports, dry_run=dry, progress=progress)
+                out.append(j)
+                if not dry and any(getattr(b, "factory", False) for b in edits):
+                    rec = factory.make(card, [tuple(x) for x in j.moved], j.id)
+                    j.log.extend(factory.save(rec, lib if lib and os.path.isdir(lib) else None, card))
+                    j.log.append(f"factory record made: {len(rec.entries)} samples")
+                    made_record.append(rec)
             return out
 
         def done(js):
@@ -1118,6 +1228,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Done", "\n".join(msg) + "\n\nUndo is in History.")
             self._build_library_root()
             self._refresh()
+            if made_record:
+                self.factory_rec = made_record[0]
+                QTimer.singleShot(300, lambda: self._offer_factory_copy(made_record[0]))
 
         def failed(msg):
             self.prog.hide()
