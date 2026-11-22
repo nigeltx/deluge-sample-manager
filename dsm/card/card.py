@@ -134,6 +134,93 @@ class Card:
                 return self.rel(long_name(full))
         return None
 
+    # ---------------------------------------------------------------- file operations
+    # Everything that reads or changes the card goes through these, so the same code works for a card in
+    # a reader (this class) and for the Deluge over USB (dsm.usb.usbcard.UsbCard).
+    is_usb = False
+
+    def local_path(self, rel: str) -> str | None:
+        """A path the PC can open directly, or None when the file is only reachable over USB."""
+        return self.abs(rel)
+
+    def exists(self, rel: str) -> bool:
+        return os.path.exists(self.abs(rel))
+
+    def stat(self, rel: str, fresh: bool = False) -> tuple[int, float]:
+        st = os.stat(self.abs(rel))
+        return st.st_size, st.st_mtime
+
+    def read_bytes(self, rel: str, progress=None, fresh: bool = False) -> bytes:
+        with open(self.abs(rel), "rb") as f:
+            return f.read()
+
+    def open_read(self, rel: str):
+        """A seekable binary file object, for reading headers."""
+        return open(self.abs(rel), "rb")
+
+    def write_bytes(self, rel: str, data: bytes) -> None:
+        """Write a whole file safely: to a temporary name first, then swapped into place."""
+        path = self.abs(rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = os.path.join(os.path.dirname(path), ".dsmtmp-" + os.path.basename(path))
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+    def put_file(self, local: str, rel: str, progress=None) -> None:
+        """Copy a file from the PC onto the card, safely. The destination must not exist."""
+        import shutil
+        path = self.abs(rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = os.path.join(os.path.dirname(path), ".dsmtmp-" + os.path.basename(path))
+        shutil.copyfile(local, tmp)
+        with open(tmp, "rb+") as f:
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+    def move(self, old: str, new: str) -> None:
+        """Move or rename a file on the card (creating folders). Refuses to overwrite."""
+        import shutil
+        src, dst = self.abs(old), self.abs(new)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        same = os.path.normcase(src) == os.path.normcase(dst)
+        if os.path.exists(dst) and not same:
+            raise RuntimeError(f"Already on the card: {new}")
+        if same and src != dst:                      # change of case only, on a case-insensitive card
+            os.rename(src, dst + ".dsmcase")
+            os.rename(dst + ".dsmcase", dst)
+        else:
+            shutil.move(src, dst)
+
+    def remove_new(self, rel: str) -> None:
+        """Remove a file this app has just written (rollback of a failed run only)."""
+        try:
+            os.remove(self.abs(rel))
+        except OSError:
+            pass
+
+    def rmdir_if_empty(self, rel: str) -> None:
+        try:
+            os.rmdir(self.abs(rel))
+        except OSError:
+            pass
+
+    def inspect(self, rel: str):
+        from dsm.audio.inspect import inspect
+        return inspect(self.abs(rel))
+
+    def read_for_playback(self, rel: str, progress=None):
+        return self.abs(rel)
+
+    def free_bytes(self) -> int | None:
+        import shutil
+        try:
+            return shutil.disk_usage(self.root).free
+        except OSError:
+            return None
+
     def sample_files(self) -> list[str]:
         from dsm.audio.inspect import AUDIO_EXTS
         return sorted(v for k, v in self.files.items()

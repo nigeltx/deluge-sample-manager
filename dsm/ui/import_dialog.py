@@ -163,6 +163,11 @@ class ImportDialog(QDialog):
         warns = sum(1 for i in active if i.warn)
         if warns:
             lines.append(f"<span style='color:#9a3412'>{warns} with a long path</span>")
+        if self.card.is_usb:
+            from dsm.usb.usbcard import eta
+            colour = "#b91c1c" if need > 5_000_000 else "#9a3412"
+            lines.append(f"<span style='color:{colour}'>Over USB the copy runs at about 30 KB/s: {eta(need)}."
+                         + (" For this many, the card reader is much quicker." if need > 5_000_000 else "") + "</span>")
         if free and need > free:
             lines.append("<span style='color:#b91c1c'><b>Not enough room on the card.</b></span>")
         self.checks.setText("<br/>".join(lines))

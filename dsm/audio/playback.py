@@ -9,8 +9,9 @@ import numpy as np
 import soundfile as sf
 
 
-def load(path: str, max_seconds: float = 120.0):
-    """Return (float32 frames x channels, rate). Long files are cut at max_seconds."""
+def load(path, max_seconds: float = 120.0):
+    """Return (float32 frames x channels, rate). path may be a file name or a file object.
+    Long files are cut at max_seconds."""
     with sf.SoundFile(path) as f:
         n = min(f.frames, int(f.samplerate * max_seconds)) if f.frames > 0 else -1
         data = f.read(frames=n, dtype="float32", always_2d=True)

@@ -5,3 +5,4 @@ numpy>=1.26,<3
 lxml>=5.2
 psutil>=5.9
 soxr>=0.5
+python-rtmidi>=1.5

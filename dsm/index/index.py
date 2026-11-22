@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from dsm.card.card import Card
-from dsm.index.xmlrefs import Reference, XmlDoc, scan_xml
+from dsm.index.xmlrefs import Reference, XmlDoc, scan_card
 
 
 @dataclass
@@ -35,7 +35,7 @@ def build_index(card: Card, progress=None) -> CardIndex:
     for i, rel in enumerate(xmls):
         if progress:
             progress(i, len(xmls), rel)
-        doc = scan_xml(card.abs(rel), rel)
+        doc = scan_card(card, rel)
         for r in doc.refs:
             r.resolved = card.resolve(r.path)
             if r.resolved:
@@ -54,8 +54,7 @@ def unused_samples(idx: CardIndex) -> list[str]:
 
 def snippet(card: Card, ref: Reference, context: int = 260) -> tuple[str, int, int]:
     """Text around a reference, and the reference's position within that text."""
-    with open(card.abs(ref.xml), "rb") as f:
-        data = f.read()
+    data = card.read_bytes(ref.xml)
     a = max(0, ref.start - context)
     b = min(len(data), ref.end + context)
     pre = data[a:ref.start].decode("utf-8", "replace")

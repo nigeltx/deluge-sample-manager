@@ -64,16 +64,29 @@ def _row_name(data: bytes, pos: int) -> str:
 
 
 def scan_xml(abs_path: str, rel: str) -> XmlDoc:
+    st = os.stat(abs_path)
+    with open(abs_path, "rb") as f:
+        return scan_data(f.read(), rel, st.st_size, st.st_mtime)
+
+
+def scan_card(card, rel: str, fresh: bool = False) -> XmlDoc:
+    try:
+        size, mtime = card.stat(rel)
+        return scan_data(card.read_bytes(rel, fresh=fresh), rel, size, mtime)
+    except Exception as e:  # noqa: BLE001 — an unreadable preset is reported, not fatal
+        doc = _doc(rel, 0, 0.0)
+        doc.error = f"Can't read: {e}"
+        return doc
+
+
+def _doc(rel, size, mtime) -> XmlDoc:
     top = rel.split("/")[0].upper()
     kind = {"KITS": "kit", "SYNTHS": "synth", "SONGS": "song"}.get(top, "other")
-    st = os.stat(abs_path)
-    doc = XmlDoc(rel=rel, kind=kind, name=os.path.splitext(os.path.basename(rel))[0], size=st.st_size, mtime=st.st_mtime)
-    try:
-        with open(abs_path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        doc.error = str(e)
-        return doc
+    return XmlDoc(rel=rel, kind=kind, name=os.path.splitext(os.path.basename(rel))[0], size=size, mtime=mtime)
+
+
+def scan_data(data: bytes, rel: str, size: int, mtime: float) -> XmlDoc:
+    doc = _doc(rel, size, mtime)
     found = []
     for m in _ATTR.finditer(data):
         form = "attr" if m.group(1) == b"fileName" else "filePath"

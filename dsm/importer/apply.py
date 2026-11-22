@@ -76,14 +76,14 @@ def backup_card(card: Card, backup_root: str, full_xml: bool) -> str:
     with open(os.path.join(d, "manifest.txt"), "w", encoding="utf-8") as f:
         for rel in sorted(card.files.values(), key=str.lower):
             try:
-                st = os.stat(card.abs(rel))
-                f.write(f"{rel}\t{st.st_size}\t{int(st.st_mtime)}\n")
-            except OSError:
+                size, mtime = card.stat(rel)
+                f.write(f"{rel}\t{size}\t{int(mtime)}\n")
+            except (OSError, KeyError, RuntimeError):
                 f.write(f"{rel}\t?\t?\n")
     if full_xml:
         with zipfile.ZipFile(os.path.join(d, "presets-and-songs.zip"), "w", zipfile.ZIP_DEFLATED) as z:
             for rel in card.xml_files():
-                z.write(card.abs(rel), rel)
+                z.writestr(rel, card.read_bytes(rel))
     _prune(backup_root)
     return d
 
@@ -104,16 +104,16 @@ def apply(batches: list[ImportBatch], card: Card, library_root: str | None, mapp
                 summary=[b.summary() for b in batches])
     items = [(b, i) for b in batches for i in b.active]
     # ---- plan check: card still there, destinations still free, room on the card
-    if not os.path.isdir(card.root):
+    if not card.is_usb and not os.path.isdir(card.root):
         raise RuntimeError("The card is no longer there.")
     for _b, i in items:
-        if os.path.exists(card.abs(i.card_rel)):
+        if card.exists(i.card_rel):
             raise RuntimeError(f"{i.card_rel} already exists on the card. Refresh and import again.")
         if not os.path.exists(i.src):
             raise RuntimeError(f"The original is gone: {i.src}")
     need = bytes_needed(batches)
-    free = shutil.disk_usage(card.root).free
-    if need > free * 0.98:
+    free = card.free_bytes()
+    if free is not None and need > free * 0.98:
         raise RuntimeError(f"Not enough room on the card: about {need // 1_000_000} MB needed, {free // 1_000_000} MB free.")
     if dry_run:
         for b, i in items:
@@ -129,17 +129,20 @@ def apply(batches: list[ImportBatch], card: Card, library_root: str | None, mapp
         for n, (b, i) in enumerate(items):
             if progress:
                 progress(n, len(items), f"Writing {i.card_rel}")
-            dest = card.abs(i.card_rel)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            tmp = os.path.join(os.path.dirname(dest), ".dsmtmp-" + os.path.basename(dest))
-            out = convert(i.src, tmp, b.profile)
-            if not out.deluge_plays or out.frames == 0:
-                os.remove(tmp)
-                raise RuntimeError(f"Check failed after writing {i.card_rel}: " + "; ".join(out.problems))
-            with open(tmp, "rb+") as f:
-                os.fsync(f.fileno())
-            os.replace(tmp, dest)
+            # convert on the PC first, check it, then put it on the card and check it there
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="dsm-") as td:
+                tmp = os.path.join(td, "out.wav")
+                out = convert(i.src, tmp, b.profile)
+                if not out.deluge_plays or out.frames == 0:
+                    raise RuntimeError(f"Check failed converting {i.card_rel}: " + "; ".join(out.problems))
+                sub = (lambda d, t, _n=n: progress(_n, len(items), f"Copying {i.card_rel}: {d // 1024} of "
+                                                                    f"{t // 1024} KB")) if progress else None
+                card.put_file(tmp, i.card_rel, progress=sub)
             j.created_card.append(i.card_rel)
+            back = card.inspect(i.card_rel)
+            if not back.deluge_plays or back.frames != out.frames:
+                raise RuntimeError(f"Check failed after writing {i.card_rel}: it doesn't read back the same")
             if i.copy_original and library_root:
                 ldest = os.path.join(library_root, *i.library_rel.split("/"))
                 if not os.path.exists(ldest):
@@ -156,10 +159,7 @@ def apply(batches: list[ImportBatch], card: Card, library_root: str | None, mapp
     except Exception:
         # roll back: remove only what this run created (they did not exist before)
         for rel in j.created_card:
-            try:
-                os.remove(card.abs(rel))
-            except OSError:
-                pass
+            card.remove_new(rel)
         for rel in j.created_library:
             try:
                 os.remove(os.path.join(library_root, *rel.split("/")))
@@ -183,13 +183,10 @@ def undo(j: Journal, card: Card, library_root: str | None, mapping: Mapping) -> 
     if j.card_serial and card.facts.serial and j.card_serial != card.facts.serial:
         return [f"That change was made on another card ({j.card_label or j.card_serial})."]
     for rel in j.created_card:
-        src = card.abs(rel)
-        if not os.path.exists(src):
+        if not card.exists(rel):
             problems.append(f"Already gone: {rel}")
             continue
-        dst = os.path.join(card.root, TRASH_DIR, j.id, *rel.split("/"))
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.move(src, dst)
+        card.move(rel, f"{TRASH_DIR}/{j.id}/{rel}")
         mapping.remove_card(rel, j.card_serial)
     if library_root:
         for rel in j.created_library:

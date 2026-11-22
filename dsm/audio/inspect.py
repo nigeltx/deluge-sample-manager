@@ -82,11 +82,14 @@ def _check(info: AudioInfo) -> AudioInfo:
     return info
 
 
-def inspect(path: str) -> AudioInfo:
+def inspect(path: str, fileobj=None) -> AudioInfo:
+    """Header facts for a file. fileobj, when given, is a seekable binary file to read instead of path
+    (used for files on the Deluge over USB)."""
     ext = os.path.splitext(path)[1].lower()
     info = AudioInfo(path=path)
     try:
-        with open(path, "rb") as f:
+        import contextlib
+        with (contextlib.nullcontext(fileobj) if fileobj is not None else open(path, "rb")) as f:
             head = f.read(12)
             if head[:4] in (b"RIFF", b"RF64") and head[8:12] == b"WAVE":
                 f.seek(0)
@@ -95,7 +98,8 @@ def inspect(path: str) -> AudioInfo:
                 f.seek(0)
                 _parse_aiff(f, info)
             else:
-                _parse_other(path, ext, info)
+                f.seek(0)
+                _parse_other(f if fileobj is not None else path, ext, info)
     except Exception as e:  # noqa: BLE001 — any unreadable file is reported, never fatal
         info.error = str(e) or e.__class__.__name__
     return _check(info)
@@ -180,7 +184,7 @@ def _parse_aiff(f, info: AudioInfo) -> None:
         f.seek(start + size + (size & 1))
 
 
-def _parse_other(path: str, ext: str, info: AudioInfo) -> None:
+def _parse_other(path, ext: str, info: AudioInfo) -> None:
     import soundfile as sf
     i = sf.info(path)
     info.container = (i.format or ext.strip(".")).upper()

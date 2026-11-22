@@ -32,6 +32,8 @@ from dsm.ui.widgets import Job, Waveform, run_job
 log = logging.getLogger("dsm.ui")
 AMBER, RED, GREEN, GREY = QColor("#9a3412"), QColor("#b91c1c"), QColor("#065f46"), QColor("#6b6f77")
 BROWSE = "Browse for a card or folder…"
+USB = "usb"
+USB_AUTOLOAD = 400_000        # over USB, samples up to this size load as soon as they are selected
 
 
 def human_size(n: int) -> str:
@@ -256,7 +258,9 @@ class MainWindow(QMainWindow):
         last = self.settings.get("last_card")
         cards = find_cards()
         target = cards[0] if cards else (last if last and os.path.isdir(last) else None)
-        if target:
+        if not cards and last == USB:
+            self._open_usb()
+        elif target:
             self._open_card(target)
         else:
             self.status_lbl.setText("No Deluge card found. Put the card in the reader and press Refresh, "
@@ -271,14 +275,18 @@ class MainWindow(QMainWindow):
         last = self.settings.get("last_card")
         if last and last not in seen and os.path.isdir(last):
             self.card_box.addItem(f"{last}  (last used)", last)
+        self.card_box.addItem("Deluge over USB", USB)
         self.card_box.addItem(BROWSE, None)
         if self.card:
-            i = self.card_box.findData(self.card.root)
+            i = self.card_box.findData(USB if self.card.is_usb else self.card.root)
             if i >= 0:
                 self.card_box.setCurrentIndex(i)
 
     def _card_chosen(self, i):
         path = self.card_box.itemData(i)
+        if path == USB:
+            self._open_usb()
+            return
         if path is None:
             path = QFileDialog.getExistingDirectory(self, "Choose the card (or a copy of it)")
             if not path:
@@ -287,7 +295,9 @@ class MainWindow(QMainWindow):
 
     def _refresh(self):
         self._fill_card_box()
-        if self.card and os.path.isdir(self.card.root):
+        if self.card and self.card.is_usb:
+            self._open_usb(reuse=True)
+        elif self.card and os.path.isdir(self.card.root):
             self._open_card(self.card.root)
         elif self.card:
             self.status_lbl.setText("The card was removed.")
@@ -296,8 +306,40 @@ class MainWindow(QMainWindow):
         else:
             self._startup()
 
+    def _close_usb(self):
+        if self.card is not None and self.card.is_usb:
+            try:
+                self.card.link.close_link()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _open_usb(self, reuse=False):
+        """Connect to the Deluge over its USB cable and read its card."""
+        self._stop()
+        old = self.card if (reuse and self.card is not None and self.card.is_usb) else None
+        if not old:
+            self._close_usb()
+        self.status_lbl.setText("Looking for the Deluge on USB …")
+        self.health_act.setEnabled(False)
+
+        def work(progress):
+            from dsm.usb.link import connect
+            from dsm.usb.usbcard import UsbCard
+            c = old or UsbCard(connect())
+            c.scan(progress=progress)
+            progress(0, 1, "Reading the Deluge's presets and songs (first time is slow; after that they come from "
+                           "the PC's copy) …")
+            return c, build_index(c, progress=progress)
+
+        def failed(msg):
+            self.prog.hide()
+            self.status_lbl.setText("Not connected to the Deluge.")
+            QMessageBox.warning(self, APP_NAME, msg.split(": ", 1)[-1])
+        run_job(Job(work, wants_progress=True), done=self._card_ready, failed=failed, progress=self._progress)
+
     def _open_card(self, path: str):
         self._stop()
+        self._close_usb()
         self.status_lbl.setText(f"Reading {path} …")
         self.health_act.setEnabled(False)
 
@@ -312,14 +354,15 @@ class MainWindow(QMainWindow):
         self.card, self.index = result
         self.health = None
         self.prog.hide()
-        self.settings["last_card"] = self.card.root
+        self.settings["last_card"] = USB if self.card.is_usb else self.card.root
         self.settings.save()
         self._fill_card_box()
         f = self.card.facts
         n_s, n_x = len(self.card.sample_files()), len(self.index.docs)
         free = f" · {human_size(f.free)} free of {human_size(f.total)}" if f.total else ""
+        via = f" · over USB ({getattr(self.card.link, 'port_name', '')})" if self.card.is_usb else ""
         self.status_lbl.setText(f"{f.label or self.card.root} · {f.fs or '?'}{free} · {n_s} samples · {n_x} presets "
-                                f"and songs · {len(self.index.missing)} missing references")
+                                f"and songs · {len(self.index.missing)} missing references{via}")
         if f.warnings:
             self.warn.setText("  ·  ".join(f.warnings))
             self.warn.show()
@@ -480,10 +523,12 @@ class MainWindow(QMainWindow):
         if not rows:
             return
 
+        card = self.card
+
         def work(progress):
             out = []
             for k, r in enumerate(rows):
-                out.append(inspect(r["abs"]))
+                out.append(card.inspect(r["rel"]) if r["where"] == "card" else inspect(r["abs"]))
                 if k % 20 == 0:
                     progress(k, len(rows), "")
             return out
@@ -566,23 +611,39 @@ class MainWindow(QMainWindow):
         self.current = row
         self.audio = None
         self._show_info(row)
-        self.wave.set_data(None, message="Loading…")
-        path = row["abs"]
+        if row["where"] == "card" and self.card.is_usb:
+            try:
+                size = self.card.stat(row["rel"])[0]
+            except FileNotFoundError:
+                size = 0
+            if size > USB_AUTOLOAD:
+                from dsm.usb.usbcard import eta
+                self.wave.set_data(None, message=f"On the Deluge over USB ({human_size(size)}) — press Play to fetch it, "
+                                                 f"{eta(size)}")
+                return
+        self._load_audio(row)
+
+    def _load_audio(self, row, then_play=False):
+        self.wave.set_data(None, message="Loading…" if row["where"] == "lib" or not self.card.is_usb
+                           else "Fetching from the Deluge over USB…")
+        path, card = row["abs"], self.card
+        rel = row.get("rel")
 
         def work():
-            data, rate = playback.load(path)
-            return path, data, rate, playback.peaks(data)
+            src = card.read_for_playback(rel) if row["where"] == "card" and card.is_usb else path
+            data, rate = playback.load(src)
+            return path, data, rate, playback.peaks(data), then_play
         run_job(Job(work), done=self._audio_loaded, failed=lambda e: self.wave.set_data(None, message=f"Can't read: {e}"))
 
     def _audio_loaded(self, res):
-        path, data, rate, pk = res
+        path, data, rate, pk, then_play = res
         if not self.current or self.current["abs"] != path:
             return
         self.audio = (data, rate)
         info = self.current.get("info")
         loop = (info.loop_start, info.loop_end) if info and info.loop_end else None
         self.wave.set_data(pk, len(data), loop)
-        if self.auto_chk.isChecked() and self.player.available:
+        if (then_play or self.auto_chk.isChecked()) and self.player.available:
             self._play()
 
     def _show_info(self, row):
@@ -663,6 +724,9 @@ class MainWindow(QMainWindow):
             self._play()
 
     def _play(self):
+        if not self.audio and self.current and self.player.available:
+            self._load_audio(self.current, then_play=True)      # not fetched yet (big file over USB)
+            return
         if not self.audio or not self.player.available:
             return
         info = (self.current or {}).get("info")
@@ -1074,5 +1138,6 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         self._stop()
+        self._close_usb()
         self.settings.save()
         super().closeEvent(e)

@@ -78,7 +78,7 @@ def check(idx: CardIndex, library_files: list[str] | None = None, progress=None)
     for i, s in enumerate(samples):
         if progress and i % 25 == 0:
             progress(i, len(samples), s)
-        info = inspect(card.abs(s))
+        info = card.inspect(s)
         bad = [p[1:] for p in info.problems if p.startswith("!")]
         if info.error or bad:
             F(Finding("convert", s, info.error or "; ".join(bad), s))

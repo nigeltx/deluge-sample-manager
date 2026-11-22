@@ -17,7 +17,7 @@ from xml.sax.saxutils import escape
 from dsm.card.card import DELUGE_OWN_SAMPLE_DIRS, SOURCE_DIRS, TRASH_DIR, Card
 from dsm.importer.apply import Journal, backup_card
 from dsm.index.index import CardIndex
-from dsm.index.xmlrefs import scan_xml
+from dsm.index.xmlrefs import scan_card, scan_xml
 
 QUOTES = {'"': "&quot;"}
 
@@ -172,9 +172,8 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
 
 
 # ------------------------------------------------------------------ apply
-def _sha1(path: str) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha1(f.read()).hexdigest()
+def _sha1(card: Card, rel: str) -> str:
+    return hashlib.sha1(card.read_bytes(rel)).hexdigest()
 
 
 def _rewrite(data: bytes, edits) -> bytes:
@@ -186,26 +185,8 @@ def _rewrite(data: bytes, edits) -> bytes:
     return out
 
 
-def _atomic_write(path: str, data: bytes):
-    tmp = os.path.join(os.path.dirname(path), ".dsmtmp-" + os.path.basename(path))
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
 def _move(card: Card, old: str, new: str):
-    src, dst = card.abs(old), card.abs(new)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.exists(dst) and os.path.normcase(src) != os.path.normcase(dst):
-        raise RuntimeError(f"Already on the card: {new}")
-    if os.path.normcase(src) == os.path.normcase(dst) and src != dst:   # case-only rename on FAT
-        tmp = dst + ".dsmcase"
-        os.rename(src, tmp)
-        os.rename(tmp, dst)
-    else:
-        shutil.move(src, dst)
+    card.move(old, new)
 
 
 def _prune_empty(card: Card, rels):
@@ -216,10 +197,7 @@ def _prune_empty(card: Card, rels):
         for i in range(len(parts), 1, -1):
             dirs.add("/".join(parts[:i]))
     for d in sorted(dirs, key=lambda x: -x.count("/")):
-        try:
-            os.rmdir(card.abs(d))
-        except OSError:
-            pass
+        card.rmdir_if_empty(d)
 
 
 def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_root: str, full_backup: bool,
@@ -229,11 +207,11 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
                 summary=[b.summary() for b in batches])
     if p.problems:
         raise RuntimeError("Can't apply:\n" + "\n".join(p.problems[:20]))
-    if not os.path.isdir(card.root):
+    if not card.is_usb and not os.path.isdir(card.root):
         raise RuntimeError("The card is no longer there.")
     for x in p.xml:                                     # nothing changed since the card was read?
-        st = os.stat(card.abs(x.xml))
-        if st.st_size != x.size or abs(st.st_mtime - x.mtime) > 0.01:
+        size, mtime = card.stat(x.xml, fresh=True) if card.is_usb else card.stat(x.xml)
+        if size != x.size or abs(mtime - x.mtime) > 0.01:
             raise RuntimeError(f"{x.xml} changed since the card was read. Press Refresh and try again.")
     if dry_run:
         j.log = p.lines(limit_per_xml=1000)
@@ -244,7 +222,8 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
     for x in p.xml:
         dst = os.path.join(xml_dir, *x.xml.split("/"))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(card.abs(x.xml), dst)
+        with open(dst, "wb") as f:
+            f.write(card.read_bytes(x.xml))
         j.xml_backups.append([x.xml, dst])
     j.save()
     total = len(p.moves) + len(p.trash) + len(p.xml)
@@ -263,11 +242,9 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
             n += 1
         j.save()
         for x in p.xml:
-            path = card.abs(x.xml)
-            with open(path, "rb") as f:
-                data = f.read()
+            data = card.read_bytes(x.xml)
             new = _rewrite(data, x.edits)
-            _atomic_write(path, new)
+            card.write_bytes(x.xml, new)
             j.xml_after[x.xml] = hashlib.sha1(new).hexdigest()
             n += 1
             if progress:
@@ -275,9 +252,10 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
         j.save()
         _prune_empty(card, [o for o, _ in j.moved] + [t for t, _ in j.trashed])
         # verify: every changed file is still well-formed (if it was) and every rewritten path resolves
-        card.scan()
+        if not card.is_usb:          # over USB the card's file list is kept up to date as files move
+            card.scan()
         for x in p.xml:
-            doc = scan_xml(card.abs(x.xml), x.xml)
+            doc = scan_card(card, x.xml, fresh=True)
             new_paths = {html_unescape(e[3]).lower() for e in x.edits}
             bad = [r.path for r in doc.refs if r.path.lower() in new_paths and not card.resolve(r.path)]
             if bad:
@@ -314,8 +292,8 @@ def _rollback(j: Journal, card: Card) -> list[str]:
     for rel, bak in j.xml_backups:
         try:
             with open(bak, "rb") as f:
-                _atomic_write(card.abs(rel), f.read())
-        except OSError as e:
+                card.write_bytes(rel, f.read())
+        except (OSError, RuntimeError) as e:
             problems.append(f"Couldn't restore {rel}: {e}")
     for t, dest in reversed(j.trashed):
         try:
@@ -339,8 +317,7 @@ def undo(j: Journal, card: Card, mapping) -> list[str]:
     problems = []
     keep = []
     for rel, bak in j.xml_backups:
-        path = card.abs(rel)
-        if os.path.exists(path) and j.xml_after.get(rel) and _sha1(path) != j.xml_after[rel]:
+        if card.exists(rel) and j.xml_after.get(rel) and _sha1(card, rel) != j.xml_after[rel]:
             problems.append(f"{rel} was saved again after this change, so it was left as it is now.")
             keep.append(rel)
     restore = Journal(**{**j.__dict__, "xml_backups": [x for x in j.xml_backups if x[0] not in keep]})

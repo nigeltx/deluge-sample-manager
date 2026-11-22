@@ -47,7 +47,16 @@ class ApplyDialog(QDialog):
                              f"After writing: {after}<br/>"
                              "Only the sample path inside each preset changes — every other byte stays as the Deluge "
                              "wrote it.</span>"))
-        warn = QLabel("<b>Don't remove the card until this finishes.</b> Undo is in History afterwards.")
+        if card.is_usb:
+            from dsm.importer.plan import bytes_needed
+            from dsm.usb.usbcard import eta
+            need = bytes_needed(imports) if imports else 0
+            lay.addWidget(QLabel("<span style='color:#9a3412'>Over USB to the Deluge" +
+                                 (f": copying samples takes {eta(need)}" if need else "") +
+                                 ". Moves and renames are instant. Don't use the Deluge's file browser until it "
+                                 "finishes.</span>"))
+        warn = QLabel("<b>Don't remove the card or unplug the Deluge until this finishes.</b> Undo is in History "
+                      "afterwards.")
         warn.setStyleSheet("background:#fff7ed;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         lay.addWidget(warn)
         row = QHBoxLayout()

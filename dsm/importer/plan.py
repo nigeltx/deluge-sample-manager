@@ -89,7 +89,8 @@ def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pa
             item.skip = f"can't read: {info.error}"
         else:
             for link in mapping.for_library(lib_rel):
-                if link.card.lower() in card.files and (not link.card_serial or link.card_serial == card.facts.serial):
+                if link.card.lower() in card.files and (not link.card_serial or not card.facts.serial
+                                                        or link.card_serial == card.facts.serial):
                     item.skip = f"already on the card as {link.card}"
                     break
         if not item.skip:
