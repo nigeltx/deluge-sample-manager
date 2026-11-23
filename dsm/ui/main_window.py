@@ -643,6 +643,8 @@ class MainWindow(QMainWindow):
         self.table.setCurrentCell(-1, -1)
         self.rows = rows
         self.table.setSortingEnabled(False)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(0)               # drop the old items first: replacing items one by one is very slow
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             it = QTableWidgetItem(row["name"])
@@ -679,6 +681,7 @@ class MainWindow(QMainWindow):
             for c in (4, 5, 7):
                 self.table.setItem(i, c, QTableWidgetItem("…"))
         self.table.setSortingEnabled(True)
+        self.table.setUpdatesEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
         if not rows:
             return
@@ -703,6 +706,7 @@ class MainWindow(QMainWindow):
         if gen != self.list_gen:
             return
         self.table.setSortingEnabled(False)
+        self.table.setUpdatesEnabled(False)
         by_abs = {i.path: i for i in infos}
         bad = convert = 0
         for r in range(self.table.rowCount()):
@@ -730,6 +734,7 @@ class MainWindow(QMainWindow):
             s.setForeground(col)
             self.table.setItem(r, 7, s)
         self.table.setSortingEnabled(True)
+        self.table.setUpdatesEnabled(True)
         bits = [f"{title} · {len(infos)} file{'s' if len(infos) != 1 else ''}"]
         if bad:
             bits.append(f"{bad} won't play on the Deluge")
@@ -768,15 +773,25 @@ class MainWindow(QMainWindow):
         rel = self._lib_rel(row["abs"])
         if not rel:
             return False
-        for link in self.mapping.for_library(rel):
-            if link.card.lower() in self.card.files:
-                return link.card
-        rec = getattr(self, "factory_rec", None)
-        if rec:
-            for e in rec.entries:
-                if e.library and e.library.lower() == rel.lower() and e.card.lower() in self.card.files:
-                    return e.card
-        return False
+        return self._on_card_map().get(rel.lower(), False)
+
+    def _on_card_map(self) -> dict[str, str]:
+        """Lower-case library path → card path, for samples on the open card. Built once per list."""
+        key = (id(self.card), len(self.card.files) if self.card else 0, len(self.mapping.links),
+               id(getattr(self, "factory_rec", None)), self.list_gen)
+        if getattr(self, "_oc_key", None) == key:
+            return self._oc_map
+        out = {}
+        if self.card:
+            rec = getattr(self, "factory_rec", None)
+            for e in (rec.entries if rec else []):
+                if e.library and e.card.lower() in self.card.files:
+                    out[e.library.lower()] = e.card
+            for link in self.mapping.links:
+                if link.card.lower() in self.card.files:
+                    out[link.library.lower()] = link.card
+        self._oc_key, self._oc_map = key, out
+        return out
 
     def _row_at(self, r):
         it = self.table.item(r, 0)
@@ -836,7 +851,16 @@ class MainWindow(QMainWindow):
             src = card.read_for_playback(rel) if row["where"] == "card" and card.is_usb else path
             data, rate = playback.load(src)
             return path, data, rate, playback.peaks(data), then_play
-        run_job(Job(work), done=self._audio_loaded, failed=lambda e: self.wave.set_data(None, message=f"Can't read: {e}"))
+        def failed(e):
+            if self.current and self.current["abs"] == path:
+                self.wave.set_data(None, message=f"Can't read this file: {e}")
+
+        def still_loading():
+            if self.current and self.current["abs"] == path and self.audio is None and self.wave.peaks is None:
+                self.wave.set_data(None, message="Still loading… if this file is in Google Drive it may be downloading. "
+                                                 "Pick another sample at any time.")
+        QTimer.singleShot(6000, still_loading)
+        run_job(Job(work), done=self._audio_loaded, failed=failed)
 
     def _audio_loaded(self, res):
         path, data, rate, pk, then_play = res
