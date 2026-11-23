@@ -1,3 +1,21 @@
+Samples by type. Version 0.8.0.
+
+Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+New
+- BY TYPE in the left pane, with counts: Drums → Kick, Snare, Clap, Closed hat, Open hat, Cymbal, Tom,
+  Percussion, Other drums; then Bass, Synth, Keys, Pad, Vocal, FX, Instrument, and Unknown.
+- The type is the app's best guess from the file name, or failing that the nearest folder name
+  (".../Kicks/Bright 01.wav" is a Kick). Hats that don't say open or closed are judged by length:
+  short = closed, long = open; the rest show as "Hats, open or closed?".
+- A Type column next to Name, and a Type line in the details pane saying where the guess came from.
+- Show: One-shots and loops / One-shots only / Loops only, under the list. It works on every list,
+  and the BY TYPE counts follow it.
+- Right-click one or many library samples → Set type… to correct the guess. Your choice always wins,
+  survives rescans, and "Go back to the app's guess" undoes it. Nothing is written to the sample files.
+- The first start after updating works out the types of the whole library (a few seconds).
+
 Fix: the app froze when moving between big lists. Version 0.7.1.
 
 Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.

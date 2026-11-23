@@ -56,6 +56,7 @@ def scan(db: LibraryDB, root: str, progress=None) -> dict:
     db.upsert(batch)
     gone = [r for r in known if r not in seen]
     db.remove(gone)
+    db.refresh_types(progress)
     if progress:
         progress(len(files), len(files), "")
     return {"seen": len(seen), "read": read, "removed": len(gone)}

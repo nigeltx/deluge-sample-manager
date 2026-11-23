@@ -22,7 +22,8 @@ def test_big_lists_switch_quickly(tmp_path, monkeypatch):
         rows.append({"rel": f"Paid/Vendor {i % 40}/Pack/S{i:05}.wav", "source": "Paid", "level1": f"Vendor {i % 40}",
                      "level2": "Pack", "name": f"S{i:05}.wav", "size": 1000, "mtime": 0, "container": "WAV",
                      "header": "PCM", "rate": 44100, "bits": 24, "channels": 1, "frames": 44100, "loop_start": None,
-                     "loop_end": None, "root_note": None, "plays": 1, "native": 1, "problems": "", "error": None})
+                     "loop_end": None, "root_note": None, "plays": 1, "native": 1, "problems": "", "error": None,
+                     "types": ",Kick,", "is_loop": 0, "type_why": "file name", "type_by_user": 0})
     t = time.time()
     for title in ("One", "Two", "Three"):
         w._list_library(rows, title)

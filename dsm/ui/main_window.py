@@ -22,6 +22,7 @@ from dsm.logs import log_dir, open_folder
 from dsm.edit import edits as ed
 from dsm.edit import factory
 from dsm.importer import apply as ap
+from dsm.library import types as stypes
 from dsm.library.db import LibraryDB
 from dsm.library.scanner import info_from_row, scan as scan_library
 from dsm.importer.mapping import Mapping
@@ -30,6 +31,7 @@ from dsm.settings import Settings, app_dir
 from dsm.ui.apply_dialog import ApplyDialog, HistoryDialog
 from dsm.ui.health_dialog import HealthDialog
 from dsm.ui.import_dialog import ImportDialog
+from dsm.ui.type_dialog import TypeDialog
 from dsm.ui.widgets import Job, Waveform, run_job
 
 log = logging.getLogger("dsm.ui")
@@ -181,8 +183,9 @@ class MainWindow(QMainWindow):
         self.warn.setStyleSheet("background:#fbe6d6;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         self.warn.hide()
         ml.addWidget(self.warn)
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["Name", "Pack", "Origin", "On card", "Length", "kHz/bit", "Used", "Deluge"])
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(["Name", "Pack", "Origin", "On card", "Length", "kHz/bit", "Used", "Deluge",
+                                              "Type"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -194,14 +197,23 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.Interactive)
         self.table.setColumnWidth(1, 190)
-        for c in range(2, 8):
+        for c in range(2, 9):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hh.moveSection(8, 1)                    # Type shows next to Name
         self.table.currentCellChanged.connect(lambda r, *_: self._row_select(r))
         self.table.installEventFilter(self)
         ml.addWidget(self.table, 1)
         self.list_label = QLabel()
         self.list_label.setStyleSheet("color:#4f535b;")
-        ml.addWidget(self.list_label)
+        lr = QHBoxLayout()
+        lr.addWidget(self.list_label, 1)
+        lr.addWidget(QLabel("Show"))
+        self.loop_filter = QComboBox()
+        self.loop_filter.addItems(["One-shots and loops", "One-shots only", "Loops only"])
+        self.loop_filter.setToolTip("One-shot or loop is guessed from the names; right-click a sample → Set type… to fix it")
+        self.loop_filter.currentIndexChanged.connect(self._loop_filter_changed)
+        lr.addWidget(self.loop_filter)
+        ml.addLayout(lr)
         split.addWidget(mid)
         # inspector
         insp = QWidget()
@@ -243,6 +255,9 @@ class MainWindow(QMainWindow):
         form.addRow("Length", self.f_len)
         form.addRow("Loop / root", self.f_loop)
         form.addRow("Location", self.f_where)
+        self.f_type = QLabel()
+        self.f_type.setWordWrap(True)
+        form.addRow("Type", self.f_type)
         self.f_link = QLabel()
         self.f_link.setWordWrap(True)
         self.f_link.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -455,7 +470,7 @@ class MainWindow(QMainWindow):
         self.tree.blockSignals(True)
         sel = self.tree.currentItem().data(0, Qt.UserRole) if self.tree.currentItem() else None
         for i in reversed(range(self.tree.topLevelItemCount())):
-            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] in ("libroot", "libsmarthdr"):
+            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] in ("libroot", "libtypehdr", "libsmarthdr"):
                 self.tree.takeTopLevelItem(i)
         root_path = self.settings["library_root"]
         counts = self.libdb.counts()
@@ -484,6 +499,7 @@ class MainWindow(QMainWindow):
                     bi.setData(0, Qt.UserRole, ("libq", {"source": src, "level1": a, "level2": b}))
                     ai.addChild(bi)
         lib.setExpanded(True)
+        self._build_type_section(1)
         on = self._library_on_card()
         total = counts.get((), 0)
         hdr = QTreeWidgetItem(["SMART LISTS"])
@@ -491,7 +507,7 @@ class MainWindow(QMainWindow):
         f2 = hdr.font(0)
         f2.setBold(True)
         hdr.setFont(0, f2)
-        self.tree.insertTopLevelItem(1, hdr)
+        self.tree.insertTopLevelItem(2, hdr)
         for name, n in (("On the card", len(on) if self.card else 0),
                         ("Not on the card", max(0, total - len(on)) if self.card else total),
                         ("Won't play on the Deluge", len(self.libdb.query(wont_play=True)))):
@@ -503,9 +519,51 @@ class MainWindow(QMainWindow):
         hdr.setExpanded(True)
         self.tree.blockSignals(False)
         if sel:
-            it = self._find_tree_item(sel) if sel[0] in ("libq", "libsmart") else None
+            it = self._find_tree_item(sel) if sel[0] in ("libq", "libroot", "libsmart", "libtype") else None
             if it:
                 self.tree.setCurrentItem(it)
+
+    def _build_type_section(self, pos):
+        """BY TYPE: Drums → Kick, Snare … then Bass, Synth … and Unknown, with counts."""
+        counts = self.libdb.type_counts(loop=self._loop_wanted())
+        hdr = QTreeWidgetItem(["BY TYPE"])
+        hdr.setData(0, Qt.UserRole, ("libtypehdr", None))
+        hdr.setToolTip(0, "Guessed from folder and file names. Right-click a sample → Set type… to correct it.")
+        f = hdr.font(0)
+        f.setBold(True)
+        hdr.setFont(0, f)
+        self.tree.insertTopLevelItem(pos, hdr)
+        n_drums = self.libdb.count(stype=stypes.DRUMS, loop=self._loop_wanted())
+        drums = QTreeWidgetItem([f"Drums  ({n_drums:,})"])
+        drums.setData(0, Qt.UserRole, ("libtype", "Drums"))
+        hdr.addChild(drums)
+        for t in stypes.DRUMS:
+            if counts.get(t):
+                it = QTreeWidgetItem([f"{stypes.label(t)}  ({counts[t]:,})"])
+                it.setData(0, Qt.UserRole, ("libtype", t))
+                drums.addChild(it)
+        for t in stypes.MUSIC + [stypes.UNKNOWN]:
+            if counts.get(t):
+                it = QTreeWidgetItem([f"{stypes.label(t)}  ({counts[t]:,})"])
+                it.setData(0, Qt.UserRole, ("libtype", t))
+                hdr.addChild(it)
+        hdr.setExpanded(True)
+        drums.setExpanded(True)
+
+    def _set_type(self, lib_rows):
+        first = self._row_types(lib_rows[0])
+        dlg = TypeDialog(self, len(lib_rows), first["types"], first["is_loop"])
+        if not dlg.exec() or not dlg.result_value:
+            return
+        rels = [self._lib_rel(r["abs"]) for r in lib_rows]
+        rels = [r for r in rels if r]
+        if dlg.result_value[0] == "set":
+            _, types, loop = dlg.result_value
+            self.libdb.set_user_type(rels, types, loop)
+        else:
+            self.libdb.clear_user_type(rels)
+        self.status_lbl.setText(f"Type updated for {len(rels):,} sample{'s' if len(rels) != 1 else ''}")
+        self._loop_filter_changed()
 
     def _scan_library(self, quiet=False):
         if self._lib_scanning:
@@ -537,7 +595,9 @@ class MainWindow(QMainWindow):
     def _list_library(self, rows_db, title, show_path=True):
         root = self.settings["library_root"]
         rows = [{"where": "lib", "abs": os.path.join(root, *r["rel"].split("/")), "librel": r["rel"], "name": r["name"],
-                 "pack": " › ".join(x for x in (r["level1"], r["level2"]) if x), "info": info_from_row(r, root)}
+                 "pack": " › ".join(x for x in (r["level1"], r["level2"]) if x), "info": info_from_row(r, root),
+                 "types": stypes.unpack(r["types"]) or [stypes.UNKNOWN], "is_loop": bool(r["is_loop"]),
+                 "type_why": r["type_why"] or "", "type_by_user": bool(r["type_by_user"])}
                 for r in rows_db]
         self._fill_rows(rows, title)
 
@@ -569,6 +629,11 @@ class MainWindow(QMainWindow):
             q = dict(val)
             title = " › ".join(["Library"] + [q[k] for k in ("source", "level1", "level2") if q.get(k)])
             self._list_library(self.libdb.query(**q), title)
+        elif kind == "libtype":
+            names = stypes.DRUMS if val == "Drums" else [val]
+            loop = self._loop_wanted()
+            self._list_library(self.libdb.query(stype=names, loop=loop),
+                               "By type › " + stypes.label(val))
         elif kind == "libsmart":
             on = self._library_on_card()
             if val == "On the card":
@@ -636,7 +701,36 @@ class MainWindow(QMainWindow):
         rows = [{"where": "lib", "abs": os.path.join(folder, n), "name": n} for n in names]
         self._fill_rows(rows, folder)
 
+    def _row_types(self, row):
+        """Give a row its types (guessed on the spot for card files and library folders)."""
+        if "types" not in row:
+            rel = row.get("rel") or self._lib_rel(row["abs"]) or row["name"]
+            info = row.get("info")
+            ty, lp, why = stypes.guess(rel, info.seconds if info and info.rate else None)
+            row.update(types=ty, is_loop=lp, type_why=why, type_by_user=False)
+        return row
+
+    def _loop_filter_changed(self, _=None):
+        cur = self.tree.currentItem()
+        kind = (cur.data(0, Qt.UserRole) or (None,))[0] if cur else None
+        self._build_library_root()              # reselecting a library item lists it again
+        if kind in ("libq", "libroot", "libsmart", "libtype"):
+            return
+        if kind is None and self.search.text().strip():
+            self._do_search()
+        elif cur:
+            self._tree_select(cur, None)
+
+    def _loop_wanted(self):
+        return {0: None, 1: False, 2: True}[self.loop_filter.currentIndex()]
+
     def _fill_rows(self, rows, title):
+        for r in rows:
+            self._row_types(r)
+        want = self._loop_wanted()
+        if want is not None:
+            rows = [r for r in rows if r["is_loop"] == want]
+            title += " · " + ("loops only" if want else "one-shots only")
         self.list_gen += 1
         gen = self.list_gen
         self.current = None
@@ -680,6 +774,12 @@ class MainWindow(QMainWindow):
             self.table.setItem(i, 6, u)
             for c in (4, 5, 7):
                 self.table.setItem(i, c, QTableWidgetItem("…"))
+            ty = QTableWidgetItem(", ".join(stypes.label(t) for t in row["types"]) + (" · loop" if row["is_loop"] else ""))
+            ty.setToolTip(("Set by you" if row["type_by_user"] else f"Guessed from the {row['type_why']}")
+                          + " · right-click → Set type… to change it")
+            if not row["type_by_user"]:
+                ty.setForeground(GREY)
+            self.table.setItem(i, 8, ty)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
@@ -894,6 +994,9 @@ class MainWindow(QMainWindow):
         else:
             for w in (self.f_format, self.f_rate, self.f_len, self.f_loop, self.problems):
                 w.setText("…")
+        self._row_types(row)
+        self.f_type.setText(", ".join(stypes.label(t) for t in row["types"]) + (" · loop" if row["is_loop"] else " · one-shot")
+                            + ("  (set by you)" if row["type_by_user"] else f"  (guessed from the {row['type_why']})"))
         self.f_link.setText(self._link_text(row))
         self.used.clear()
         if row["where"] == "card" and self.index:
@@ -1109,6 +1212,10 @@ class MainWindow(QMainWindow):
         card_rows = [r for r in rows if r and r["where"] == "card"]
         m = QMenu(self)
         acts = {}
+        all_lib = [r for r in lib_rows if self._lib_rel(r["abs"])]
+        if all_lib:
+            acts[m.addAction(f"Set type… ({len(all_lib):,})" if len(all_lib) > 1 else "Set type…")] = "type"
+            m.addSeparator()
         lib_fact = [r for r in lib_rows if r.get("origin") == "Factory"]
         lib_rows = [r for r in lib_rows if r.get("origin") != "Factory"]
         if lib_fact:
@@ -1135,7 +1242,9 @@ class MainWindow(QMainWindow):
         if not acts:
             return
         what = acts.get(m.exec(self.table.viewport().mapToGlobal(pos)))
-        if what == "send":
+        if what == "type":
+            self._set_type(all_lib)
+        elif what == "send":
             self._start_import([(r["abs"], None) for r in send])
         elif what == "remove":
             rels = [r["on_card"] for r in on]
