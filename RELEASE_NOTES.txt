@@ -1,19 +1,24 @@
-Factory lock and Initialize Factory Samples. Version 0.6.0.
+Library-first layout, like the Patch Manager. Version 0.7.0.
 
 Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.
 Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
 
 New
-- Initialize Factory Samples (toolbar) replaces "Factory move". Run it once, first: it moves the factory
-  samples under SAMPLES/FACTORY (updating every kit, synth and song), makes the factory record, and copies
-  every factory sample untouched into the library's FACTORY folder with a checksum. You see the folder
-  list and every change before anything happens. Over USB the copy waits for the card reader.
-- When a card that hasn't been initialized is opened, the app offers to initialize it.
-- Factory samples are locked: the app won't rename, move, trash or write over them, nothing can be
-  imported into SAMPLES/FACTORY (Import now offers Free and Paid only), and the library copies are
-  read-only. Right-click shows "🔒 locked" instead of the actions.
-- New Origin column on every sample: 🔒 Factory, Free, Paid, or Deluge (its own folders).
-- Samples that are on the Deluge's card show their name in bold green, with a ✓ in the new On card
-  column — in the library too, so you can see which originals are already on the card.
+- The left pane now shows the samples on the PC first:
+    LIBRARY (count) → 🔒 Factory / Free / Paid → vendor → pack, each with how many samples it holds.
+    SMART LISTS → On the card, Not on the card, Won't play on the Deluge.
+    ON THE DELUGE → the card's own folders, at the bottom, for recordings, clips and Health check work.
+- Clicking a vendor or pack lists every sample in it at once (not one folder level). Columns: Name, Pack,
+  Origin, On card, Length, kHz/bit, Used, Deluge. Samples on the card are bold green with a ✓.
+- The library is indexed into a small database on the PC, so it opens instantly. "Scan library"
+  (Ctrl+R) picks up new or changed files; it also runs by itself at start-up and after imports.
+- Right-click a pack, vendor, Free or Paid: "Send N not yet on the card to the card…".
+  Right-click library samples: "Send to the card…" or "Remove from the card…" (to the card trash; samples
+  a kit, synth or song uses stay).
+- The details panel shows which kits, synths and songs use a library sample's copy on the card.
+- Search now searches the whole library ('unused' still lists unused samples on the card).
+
+The first scan reads every sample's header once. If the Samples folder in Google Drive is set to
+stream, set it to "Available offline" first, or the first scan downloads each file.
 
 If something goes wrong, use the Log folder button and send the dsm.log file.

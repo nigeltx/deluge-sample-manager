@@ -14,7 +14,8 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - `dsm/edit` — M4: rename / move / relink / trash of card files, with byte-exact path rewrites in every kit, synth and song; factory move
 - `dsm/edit/factory.py` — the factory record (original path, new path, size, date, SHA-1 once copied) made at the factory move; saved in the library (_DSM/factory-record.json) and on the card (DSM/FACTORY_RECORD.JSON); untouched copies go to LIBRARY/FACTORY/…
 - `dsm/usb` — the Deluge's card over USB (Community Firmware 1.3 SysEx file commands): `link.py` protocol, `usbcard.py` a Card backend with a PC cache of presets and sample headers, `winmm_in.py` big-buffer MIDI input (from the bench test)
-- `dsm/ui` — PySide6 windows; no file logic here
+- `dsm/library` — the PC library index (SQLite at %LOCALAPPDATA%\DelugeSampleManager\library.db): `scanner.py` incremental scan (size+date), `db.py` counts and queries for the left pane
+- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (All / Factory / Free / Paid → vendor → pack, with counts), SMART LISTS, then ON THE DELUGE (card folders); middle = sample list (green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
 - `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer and
   publishes a GitHub release on every push to main

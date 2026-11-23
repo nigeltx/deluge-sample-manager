@@ -22,6 +22,8 @@ from dsm.logs import log_dir, open_folder
 from dsm.edit import edits as ed
 from dsm.edit import factory
 from dsm.importer import apply as ap
+from dsm.library.db import LibraryDB
+from dsm.library.scanner import info_from_row, scan as scan_library
 from dsm.importer.mapping import Mapping
 from dsm.importer.plan import expand
 from dsm.settings import Settings, app_dir
@@ -63,6 +65,8 @@ class MainWindow(QMainWindow):
         self.backed_up_this_session = False
         self.factory_rec = None
         self._offered_init = set()
+        self.libdb = LibraryDB()
+        self._lib_scanning = False
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1400, 860)
@@ -76,6 +80,12 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Main")
         tb.setMovable(False)
         self.addToolBar(tb)
+        sl = QAction("Scan library", self)
+        sl.setShortcut("Ctrl+R")
+        sl.setToolTip("Look for new or changed samples in the PC library")
+        sl.triggered.connect(self._scan_library)
+        tb.addAction(sl)
+        tb.addSeparator()
         tb.addWidget(QLabel(" Card: "))
         self.card_box = QComboBox()
         self.card_box.setMinimumWidth(260)
@@ -118,7 +128,7 @@ class MainWindow(QMainWindow):
         tb.addAction(lg)
         tb.addSeparator()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search the card — name, or 'unused'")
+        self.search.setPlaceholderText("Search the library — e.g.  kick 808   (or 'unused' for the card)")
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(300)
         self.search.returnPressed.connect(self._do_search)
@@ -171,8 +181,8 @@ class MainWindow(QMainWindow):
         self.warn.setStyleSheet("background:#fbe6d6;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         self.warn.hide()
         ml.addWidget(self.warn)
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["Name", "Origin", "On card", "Length", "kHz/bit", "Used", "Deluge"])
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(["Name", "Pack", "Origin", "On card", "Length", "kHz/bit", "Used", "Deluge"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -182,7 +192,9 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(True)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
-        for c in range(1, 7):
+        hh.setSectionResizeMode(1, QHeaderView.Interactive)
+        self.table.setColumnWidth(1, 190)
+        for c in range(2, 8):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.currentCellChanged.connect(lambda r, *_: self._row_select(r))
         self.table.installEventFilter(self)
@@ -247,7 +259,7 @@ class MainWindow(QMainWindow):
         self.used.setToolTip("Double-click to see the exact line in the preset file")
         il.addWidget(self.used, 1)
         split.addWidget(insp)
-        split.setSizes([300, 640, 460])
+        split.setSizes([270, 790, 340])
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._stop)
 
     def _build_status(self):
@@ -264,6 +276,7 @@ class MainWindow(QMainWindow):
     def _startup(self):
         self._fill_card_box()
         self._build_library_root()
+        QTimer.singleShot(200, lambda: self._scan_library(quiet=True))
         last = self.settings.get("last_card")
         cards = find_cards()
         target = cards[0] if cards else (last if last and os.path.isdir(last) else None)
@@ -379,6 +392,7 @@ class MainWindow(QMainWindow):
             self.warn.hide()
         self.health_act.setEnabled(True)
         self.import_act.setEnabled(True)
+        QTimer.singleShot(0, self._build_library_root)
         self.factory_rec = factory.load(self.settings["library_root"], self.card)
         if self.factory_rec and self.factory_rec.undone:
             self.factory_rec = None
@@ -390,13 +404,18 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ tree
     def _build_card_tree(self):
         self.tree.blockSignals(True)
-        top = self.tree.topLevelItem(0)
-        if top and top.data(0, Qt.UserRole) == ("cardroot", None):
-            self.tree.takeTopLevelItem(0)
+        for i in range(self.tree.topLevelItemCount()):
+            if self.tree.topLevelItem(i).data(0, Qt.UserRole) == ("cardroot", None):
+                self.tree.takeTopLevelItem(i)
+                break
         if self.card:
-            root = QTreeWidgetItem([f"CARD  {self.card.facts.label or self.card.root}"])
+            root = QTreeWidgetItem([f"ON THE DELUGE  —  {self.card.facts.label or self.card.root}"])
             root.setData(0, Qt.UserRole, ("cardroot", None))
-            self.tree.insertTopLevelItem(0, root)
+            f = root.font(0)
+            f.setBold(True)
+            root.setFont(0, f)
+            root.setForeground(0, GREEN)
+            self.tree.addTopLevelItem(root)
             items = {}
             for d in sorted(self.card.dirs, key=lambda s: s.lower()):
                 if d.split("/")[0].upper() == "DSM":          # the app's own data folder on the card
@@ -413,28 +432,118 @@ class MainWindow(QMainWindow):
                 s = QTreeWidgetItem([f"★ {name}"])
                 s.setData(0, Qt.UserRole, ("smart", name))
                 root.addChild(s)
-            root.setExpanded(True)
-            if "SAMPLES" in items:
-                items["SAMPLES"].setExpanded(True)
+            root.setExpanded(False)
         self.tree.blockSignals(False)
 
+    def _library_on_card(self) -> set[str]:
+        """Lower-case library paths whose sample is on the open card."""
+        out = set()
+        if not self.card:
+            return out
+        for link in self.mapping.links:
+            if link.card.lower() in self.card.files:
+                out.add(link.library.lower())
+        rec = self.factory_rec
+        if rec:
+            for e in rec.entries:
+                if e.library and e.card.lower() in self.card.files:
+                    out.add(e.library.lower())
+        return out
+
     def _build_library_root(self):
-        for i in range(self.tree.topLevelItemCount()):
-            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] == "libroot":
+        """The library section: All, Factory / Free / Paid → vendor → pack with counts, then smart lists."""
+        self.tree.blockSignals(True)
+        sel = self.tree.currentItem().data(0, Qt.UserRole) if self.tree.currentItem() else None
+        for i in reversed(range(self.tree.topLevelItemCount())):
+            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] in ("libroot", "libsmarthdr"):
                 self.tree.takeTopLevelItem(i)
-                break
         root_path = self.settings["library_root"]
-        lib = QTreeWidgetItem([f"LIBRARY  {root_path}"])
-        lib.setData(0, Qt.UserRole, ("libroot", root_path))
-        if os.path.isdir(root_path):
-            lib.addChild(QTreeWidgetItem(["…"]))
-        else:
-            lib.addChild(QTreeWidgetItem(["(folder not found — set it in Settings)"]))
-        self.tree.addTopLevelItem(lib)
+        counts = self.libdb.counts()
+        ok = bool(root_path and os.path.isdir(root_path))
+        lib = QTreeWidgetItem([f"LIBRARY  ({counts.get((), 0):,})" if ok else "LIBRARY  (folder not found — Settings)"])
+        lib.setData(0, Qt.UserRole, ("libroot", {}))
+        lib.setToolTip(0, root_path)
+        f = lib.font(0)
+        f.setBold(True)
+        lib.setFont(0, f)
+        self.tree.insertTopLevelItem(0, lib)
+        for src in ("Factory", "Free", "Paid", "Other"):
+            n = counts.get((src,), 0)
+            if not n and src == "Other":
+                continue
+            si = QTreeWidgetItem([("🔒 " if src == "Factory" else "") + f"{src}  ({n:,})"])
+            si.setData(0, Qt.UserRole, ("libq", {"source": src}))
+            lib.addChild(si)
+            l1s = sorted({k[1] for k in counts if len(k) >= 2 and k[0] == src}, key=str.lower)
+            for a in l1s:
+                ai = QTreeWidgetItem([f"{a}  ({counts.get((src, a), 0):,})"])
+                ai.setData(0, Qt.UserRole, ("libq", {"source": src, "level1": a}))
+                si.addChild(ai)
+                for b in sorted({k[2] for k in counts if len(k) == 3 and k[0] == src and k[1] == a}, key=str.lower):
+                    bi = QTreeWidgetItem([f"{b}  ({counts.get((src, a, b), 0):,})"])
+                    bi.setData(0, Qt.UserRole, ("libq", {"source": src, "level1": a, "level2": b}))
+                    ai.addChild(bi)
+        lib.setExpanded(True)
+        on = self._library_on_card()
+        total = counts.get((), 0)
+        hdr = QTreeWidgetItem(["SMART LISTS"])
+        hdr.setData(0, Qt.UserRole, ("libsmarthdr", None))
+        f2 = hdr.font(0)
+        f2.setBold(True)
+        hdr.setFont(0, f2)
+        self.tree.insertTopLevelItem(1, hdr)
+        for name, n in (("On the card", len(on) if self.card else 0),
+                        ("Not on the card", max(0, total - len(on)) if self.card else total),
+                        ("Won't play on the Deluge", len(self.libdb.query(wont_play=True)))):
+            it = QTreeWidgetItem([f"★ {name}  ({n:,})"])
+            it.setData(0, Qt.UserRole, ("libsmart", name))
+            if name == "On the card":
+                it.setForeground(0, GREEN)
+            hdr.addChild(it)
+        hdr.setExpanded(True)
+        self.tree.blockSignals(False)
+        if sel:
+            it = self._find_tree_item(sel) if sel[0] in ("libq", "libsmart") else None
+            if it:
+                self.tree.setCurrentItem(it)
+
+    def _scan_library(self, quiet=False):
+        if self._lib_scanning:
+            return
+        root = self.settings["library_root"]
+        if not root or not os.path.isdir(root):
+            self._build_library_root()
+            if not quiet:
+                QMessageBox.information(self, APP_NAME, f"The library folder isn't there:\n{root}\n\nSet it in Settings.")
+            return
+        self._lib_scanning = True
+        db = self.libdb
+
+        def work(progress):
+            return scan_library(db, root, progress=progress)
+
+        def done(r):
+            self._lib_scanning = False
+            self.prog.hide()
+            self._build_library_root()
+            self.status_lbl.setText(f"Library: {r.get('seen', 0):,} samples · {r.get('read', 0):,} new or changed "
+                                    f"read · {r.get('removed', 0):,} gone")
+
+        def failed(msg):
+            self._lib_scanning = False
+            self._job_failed(msg)
+        run_job(Job(work, wants_progress=True), done=done, failed=failed, progress=self._progress)
+
+    def _list_library(self, rows_db, title, show_path=True):
+        root = self.settings["library_root"]
+        rows = [{"where": "lib", "abs": os.path.join(root, *r["rel"].split("/")), "librel": r["rel"], "name": r["name"],
+                 "pack": " › ".join(x for x in (r["level1"], r["level2"]) if x), "info": info_from_row(r, root)}
+                for r in rows_db]
+        self._fill_rows(rows, title)
 
     def _tree_expand(self, item):
         kind, path = item.data(0, Qt.UserRole) or (None, None)
-        if kind not in ("lib", "libroot") or item.childCount() != 1 or item.child(0).data(0, Qt.UserRole):
+        if kind != "lib" or item.childCount() != 1 or item.child(0).data(0, Qt.UserRole):
             return
         item.takeChild(0)
         try:
@@ -456,7 +565,19 @@ class MainWindow(QMainWindow):
         kind, val = item.data(0, Qt.UserRole)
         if kind == "card":
             self._list_card([f for f in self._card_files_in(val)], f"{val}")
-        elif kind in ("lib", "libroot"):
+        elif kind in ("libq", "libroot"):
+            q = dict(val)
+            title = " › ".join(["Library"] + [q[k] for k in ("source", "level1", "level2") if q.get(k)])
+            self._list_library(self.libdb.query(**q), title)
+        elif kind == "libsmart":
+            on = self._library_on_card()
+            if val == "On the card":
+                self._list_library(self.libdb.query(rels=on), "On the card")
+            elif val == "Not on the card":
+                self._list_library([r for r in self.libdb.query() if r["rel"].lower() not in on], "Not on the card")
+            else:
+                self._list_library(self.libdb.query(wont_play=True), "Won't play on the Deluge")
+        elif kind == "lib":
             self._list_lib(val)
         elif kind == "smart" and self.index:
             if val.startswith("Unused"):
@@ -501,8 +622,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ file list
     def _list_card(self, rels, title, show_dir=False):
-        rows = [{"where": "card", "rel": r, "abs": self.card.abs(r),
-                 "name": r[len("SAMPLES/"):] if show_dir else os.path.basename(r)} for r in rels]
+        rows = [{"where": "card", "rel": r, "abs": self.card.abs(r), "name": os.path.basename(r),
+                 "pack": r.rsplit("/", 1)[0][len("SAMPLES/"):] if "/" in r[len("SAMPLES/"):] else ""} for r in rels]
         self._fill_rows(rows, title)
 
     def _list_lib(self, folder):
@@ -535,23 +656,27 @@ class MainWindow(QMainWindow):
                 it.setFont(f)
                 it.setToolTip("On the Deluge's card" + (f": {on_card}" if isinstance(on_card, str) else ""))
             self.table.setItem(i, 0, it)
+            pk = QTableWidgetItem(row.get("pack", ""))
+            pk.setForeground(GREY)
+            pk.setToolTip(row.get("librel") or row.get("rel") or "")
+            self.table.setItem(i, 1, pk)
             org = self._origin(row)
             row["origin"] = org
             o = QTableWidgetItem(("🔒 " if org == "Factory" else "") + org)
             if org == "Factory":
                 o.setForeground(QColor("#1d4ed8"))
                 o.setToolTip("Factory sample — locked: it can't be renamed, moved, trashed or overwritten")
-            self.table.setItem(i, 1, o)
+            self.table.setItem(i, 2, o)
             oc = QTableWidgetItem("✓" if on_card else "")
             oc.setForeground(GREEN)
             oc.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(i, 2, oc)
+            self.table.setItem(i, 3, oc)
             used = len(self.index.uses(row["rel"])) if row["where"] == "card" and self.index else None
             u = QTableWidgetItem()
             if used is not None:
                 u.setData(Qt.DisplayRole, used)
-            self.table.setItem(i, 5, u)
-            for c in (3, 4, 6):
+            self.table.setItem(i, 6, u)
+            for c in (4, 5, 7):
                 self.table.setItem(i, c, QTableWidgetItem("…"))
         self.table.setSortingEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
@@ -559,11 +684,15 @@ class MainWindow(QMainWindow):
             return
 
         card = self.card
+        if all(r.get("info") for r in rows):            # library rows come with their facts: no file reads
+            self._rows_inspected(gen, title, [r["info"] for r in rows])
+            return
 
         def work(progress):
             out = []
             for k, r in enumerate(rows):
-                out.append(card.inspect(r["rel"]) if r["where"] == "card" else inspect(r["abs"]))
+                out.append(r["info"] if r.get("info") else
+                           card.inspect(r["rel"]) if r["where"] == "card" else inspect(r["abs"]))
                 if k % 20 == 0:
                     progress(k, len(rows), "")
             return out
@@ -584,11 +713,11 @@ class MainWindow(QMainWindow):
                 continue
             ln = QTableWidgetItem(f"{info.seconds:.2f}s")
             ln.setData(Qt.UserRole + 1, info.seconds)
-            self.table.setItem(r, 3, ln)
+            self.table.setItem(r, 4, ln)
             fmt = QTableWidgetItem(info.short_format())
             if info.rate and info.rate != 44100:
                 fmt.setForeground(AMBER)
-            self.table.setItem(r, 4, fmt)
+            self.table.setItem(r, 5, fmt)
             if not info.deluge_plays:
                 st, col = "won't play", RED
                 bad += 1
@@ -599,7 +728,7 @@ class MainWindow(QMainWindow):
                 st, col = "native", GREEN
             s = QTableWidgetItem(st)
             s.setForeground(col)
-            self.table.setItem(r, 6, s)
+            self.table.setItem(r, 7, s)
         self.table.setSortingEnabled(True)
         bits = [f"{title} · {len(infos)} file{'s' if len(infos) != 1 else ''}"]
         if bad:
@@ -658,7 +787,13 @@ class MainWindow(QMainWindow):
 
     def _do_search(self):
         q = self.search.text().strip().lower()
-        if not self.card or not q:
+        if not q:
+            return
+        if q != "unused":
+            rows = self.libdb.query(text=q, limit=5000)
+            self._list_library(rows, f"Search: {q}" + (" (first 5,000)" if len(rows) >= 5000 else ""))
+            return
+        if not self.card:
             return
         if q == "unused":
             if self.index:
@@ -747,6 +882,15 @@ class MainWindow(QMainWindow):
                 self.used.addItem(it)
             if not refs:
                 self.used.addItem("Nothing on the card uses this sample.")
+        elif isinstance(row.get("on_card"), str) and self.index:
+            refs = self.index.uses(row["on_card"])
+            self.used_lbl.setText(f"USED BY ({len(refs)}) — its copy on the card")
+            for ref in refs:
+                it = QListWidgetItem(ref.xml + (f" · row {ref.row}" if ref.row else ""))
+                it.setData(Qt.UserRole, ref)
+                self.used.addItem(it)
+            if not refs:
+                self.used.addItem("On the card, but nothing there uses it yet.")
         else:
             self.used_lbl.setText("USED BY")
             self.used.addItem("Library file — not on the card.")
@@ -872,6 +1016,7 @@ class MainWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle("Settings")
         lay = QFormLayout(dlg)
+        old_root = self.settings["library_root"]
         path = QLineEdit(self.settings["library_root"])
         pick = QPushButton("Browse…")
         pick.clicked.connect(lambda: path.setText(QFileDialog.getExistingDirectory(dlg, "Library folder", path.text()) or path.text()))
@@ -896,8 +1041,10 @@ class MainWindow(QMainWindow):
             self.settings["library_root"] = path.text().strip()
             self.settings["backup_root"] = bpath.text().strip()
             self.settings.save()
+            if self.settings["library_root"] != old_root:
+                self.libdb.clear()
             self.mapping = Mapping(self.settings["library_root"])
-            self._build_library_root()
+            self._scan_library(quiet=True)
 
     # ------------------------------------------------------------------ import (M3)
     def _link_text(self, row) -> str:
@@ -938,8 +1085,17 @@ class MainWindow(QMainWindow):
         card_rows = [r for r in rows if r and r["where"] == "card"]
         m = QMenu(self)
         acts = {}
-        if lib_rows:
-            acts[m.addAction(f"Send {len(lib_rows)} to the card…")] = "send"
+        lib_fact = [r for r in lib_rows if r.get("origin") == "Factory"]
+        lib_rows = [r for r in lib_rows if r.get("origin") != "Factory"]
+        if lib_fact:
+            a = m.addAction(f"🔒 {len(lib_fact)} factory sample{'s' if len(lib_fact) != 1 else ''} — locked")
+            a.setEnabled(False)
+        send = [r for r in lib_rows if not r.get("on_card")]
+        on = [r for r in lib_rows if isinstance(r.get("on_card"), str)]
+        if send:
+            acts[m.addAction(f"Send {len(send)} to the card…")] = "send"
+        if on and self.index:
+            acts[m.addAction(f"Remove {len(on)} from the card…")] = "remove"
         locked = [r for r in card_rows if factory.is_factory_card(r["rel"])]
         if locked:
             a = m.addAction(f"🔒 {len(locked)} factory sample{'s are' if len(locked) != 1 else ' is'} locked")
@@ -956,7 +1112,17 @@ class MainWindow(QMainWindow):
             return
         what = acts.get(m.exec(self.table.viewport().mapToGlobal(pos)))
         if what == "send":
-            self._start_import([(r["abs"], None) for r in lib_rows])
+            self._start_import([(r["abs"], None) for r in send])
+        elif what == "remove":
+            rels = [r["on_card"] for r in on]
+            used = [x for x in rels if self.index.uses(x)]
+            free = [x for x in rels if not self.index.uses(x)]
+            if used:
+                QMessageBox.information(self, APP_NAME, f"{len(used)} of these are used by kits, synths or songs, so they "
+                                        "stay on the card:\n\n" + "\n".join(used[:12]))
+            if free:
+                self._add_edit(ed.EditBatch(f"Remove {len(free)} sample{'s' if len(free) != 1 else ''} from the card "
+                                            "(to the card trash)", trash=free))
         elif what == "rename":
             self._rename_file(card_rows[0]["rel"])
         elif what == "move":
@@ -984,12 +1150,26 @@ class MainWindow(QMainWindow):
             elif got is mov:
                 self._move_folder(d[1])
             return
-        if not d or d[0] not in ("lib", "libroot"):
+        if not d or d[0] not in ("libq", "libroot", "libsmart"):
             return
+        if d[0] == "libsmart":
+            return
+        q = dict(d[1])
+        if q.get("source") == "Factory":
+            m = QMenu(self)
+            a = m.addAction("🔒 Factory samples come from Initialize Factory Samples")
+            a.setEnabled(False)
+            m.exec(self.tree.viewport().mapToGlobal(pos))
+            return
+        rows = self.libdb.query(**q)
+        on = self._library_on_card()
+        todo = [r for r in rows if r["rel"].lower() not in on and r["source"] != "Factory"]
         m = QMenu(self)
-        a = m.addAction("Send this whole folder to the card…")
+        a = m.addAction(f"Send {len(todo)} not yet on the card to the card…")
+        a.setEnabled(bool(todo) and self.card is not None)
         if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
-            self._start_import([(f, None) for f, _ in expand([d[1]])])
+            root = self.settings["library_root"]
+            self._start_import([(os.path.join(root, *r["rel"].split("/")), None) for r in todo])
 
     # ------------------------------------------------------------------ rename / move / relink (M4)
     def _add_edit(self, batch):
@@ -1093,7 +1273,7 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.information(self, "Factory copy", text + "\nEvery copy has a checksum in the record.")
             self.factory_rec = rec
-            self._build_library_root()
+            self._scan_library(quiet=True)
             if self.current:
                 self._show_info(self.current)
         run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
@@ -1271,7 +1451,7 @@ class MainWindow(QMainWindow):
             if problems:
                 box.setDetailedText("\n".join(problems))
             box.exec()
-            self._build_library_root()
+            self._scan_library(quiet=True)
             self._refresh()
 
         def failed(msg):
@@ -1397,7 +1577,7 @@ class MainWindow(QMainWindow):
                     msg.append(f"{len(j.created_card)} files written to the card and checked; "
                                f"{len(j.created_library)} originals copied into the library.")
             QMessageBox.information(self, "Done", "\n".join(msg) + "\n\nUndo is in History.")
-            self._build_library_root()
+            self._scan_library(quiet=True)
             self._refresh()
             if made_record:
                 self.factory_rec = made_record[0]
