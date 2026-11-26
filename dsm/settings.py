@@ -1,4 +1,7 @@
-"""Settings and app-data folders. Everything lives under %LOCALAPPDATA%\\DelugeSampleManager."""
+"""Settings and app-data folders. Everything lives under %LOCALAPPDATA%\\SampleManager.
+
+Before 0.9 the app was called Deluge Sample Manager and kept its data in %LOCALAPPDATA%\\DelugeSampleManager;
+the first start moves that folder across (move_old_app_dir)."""
 from __future__ import annotations
 
 import json
@@ -8,9 +11,23 @@ import sys
 
 def app_dir() -> str:
     base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    d = os.path.join(base, "DelugeSampleManager")
+    d = os.path.join(base, "SampleManager")
+    if not os.path.isdir(d):
+        move_old_app_dir(base, d)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def move_old_app_dir(base: str, new: str) -> bool:
+    """Move %LOCALAPPDATA%\\DelugeSampleManager to the new name, once. Returns True if it moved."""
+    old = os.path.join(base, "DelugeSampleManager")
+    if not os.path.isdir(old) or os.path.exists(new):
+        return False
+    try:
+        os.rename(old, new)
+        return True
+    except OSError:
+        return False
 
 
 def default_library_root() -> str:

@@ -42,10 +42,11 @@ def test_record_copy_and_check(card, tmp_path):
     out = factory.copy_to_library(rec, card, lib, m)
     assert out["copied"] == 2 and not out["problems"]
     e = rec.by_card()["samples/factory/oldstuff/kicks/kick_unused.wav"]
-    copy = os.path.join(lib, "FACTORY", "OLDSTUFF", "KICKS", "kick_unused.wav")
+    copy = os.path.join(lib, "Sources", "Factory", "Deluge", "OLDSTUFF", "KICKS", "kick_unused.wav")
     assert open(copy, "rb").read() == open(card.abs(e.card), "rb").read()
     assert e.sha1 == hashlib.sha1(open(copy, "rb").read()).hexdigest()
-    assert m.for_card(e.card).library == "FACTORY/OLDSTUFF/KICKS/kick_unused.wav"
+    assert m.for_card(e.card).library == "Sources/Factory/Deluge/OLDSTUFF/KICKS/kick_unused.wav"
+    assert factory.missing_from_library(rec, lib) == []
     assert factory.copy_to_library(factory.load(lib), card, lib, m)["skipped"] == 2
     assert factory.check(rec, card) == []
     with open(card.abs(e.card), "ab") as f:
@@ -91,10 +92,7 @@ def test_factory_locks(card, tmp_path):
     write_wav(src)
     plan = build_plan([(src, None)], "FACTORY", "", "", Profile(), card, lib, m)
     assert plan.items[0].skip and "locked" in plan.items[0].skip
-    factory.copy_to_library(rec, card, lib, m)
-    copy = os.path.join(lib, "FACTORY", "OLDSTUFF", "KICKS", "kick_unused.wav")
-    import stat
-    assert not os.stat(copy).st_mode & stat.S_IWUSR
+    # the library copy is locked by fingerprint (spec 2.2), not by the read-only mark Drive drops
 
 
 def test_origin_and_existing_record(card, tmp_path):
@@ -104,3 +102,19 @@ def test_origin_and_existing_record(card, tmp_path):
     assert factory.origin("FREE/V/P/k.wav", on_card=False) == "Free"
     rec = factory.record_from_existing(card)
     assert {e.original for e in rec.entries} == {"SAMPLES/SYNTHS/PAD & CHOIR.WAV"}
+
+
+def test_copy_keeps_what_is_already_in_sources(card, tmp_path):
+    """A copy already in Sources at the right size is never overwritten; its checksum is recorded."""
+    rec, lib, m, j = _factory_move(card, tmp_path)
+    e = rec.by_card()["samples/factory/loose.wav"]
+    there = os.path.join(lib, "Sources", "Factory", "Deluge", "loose.WAV")         # another case, as on Drive
+    os.makedirs(os.path.dirname(there), exist_ok=True)
+    with open(card.abs(e.card), "rb") as f, open(there, "wb") as o:
+        o.write(f.read())
+    os.utime(there, (1, 1))
+    assert [x.card for x in factory.missing_from_library(rec, lib)] == ["SAMPLES/FACTORY/OLDSTUFF/KICKS/kick_unused.wav"]
+    out = factory.copy_to_library(rec, card, lib, m)
+    assert out == {"copied": 1, "skipped": 1, "problems": []}
+    assert os.path.getmtime(there) == 1                     # untouched
+    assert e.library == "Sources/Factory/Deluge/loose.WAV" and e.sha1

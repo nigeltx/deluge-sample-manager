@@ -13,13 +13,14 @@ def test_big_lists_switch_quickly(tmp_path, monkeypatch):
     from dsm.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(MainWindow, "_scan_library", lambda self, quiet=False: None)
+    monkeypatch.setattr(MainWindow, "_scan_library", lambda self, quiet=False, then=None: None)
     w = MainWindow(Settings.load())
     w.settings["library_root"] = str(tmp_path / "lib")
     w.show()
     rows = []
     for i in range(20000):
-        rows.append({"rel": f"Paid/Vendor {i % 40}/Pack/S{i:05}.wav", "source": "Paid", "level1": f"Vendor {i % 40}",
+        rows.append({"rel": f"Sources/Paid/Vendor {i % 40}/Pack/S{i:05}.wav", "area": "Sources", "audio": str(i),
+                     "source": "Paid", "level1": f"Vendor {i % 40}",
                      "level2": "Pack", "name": f"S{i:05}.wav", "size": 1000, "mtime": 0, "container": "WAV",
                      "header": "PCM", "rate": 44100, "bits": 24, "channels": 1, "frames": 44100, "loop_start": None,
                      "loop_end": None, "root_note": None, "plays": 1, "native": 1, "problems": "", "error": None,

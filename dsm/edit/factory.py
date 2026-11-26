@@ -2,7 +2,8 @@
 
 Made when the factory library is moved under SAMPLES/FACTORY. Each entry holds the sample's original
 path, its path now, its size and date, and (once copied) a SHA-1 checksum and the path of the copy in the
-library's FACTORY folder. The record is saved in the library (_DSM/factory-record.json, synced with
+library's Sources › Factory › Deluge folder. The record is saved in the library (_Sample Manager/factory-record.json,
+(_DSM before 0.9), synced with
 Drive) and on the card (DSM/FACTORY_RECORD.JSON, outside SAMPLES so the Deluge's browser never shows it).
 """
 from __future__ import annotations
@@ -10,11 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import time
 from dataclasses import asdict, dataclass, field
 
-LIB_NAME = os.path.join("_DSM", "factory-record.json")
+LIB_NAME = os.path.join("_Sample Manager", "factory-record.json")
+OLD_LIB_NAME = os.path.join("_DSM", "factory-record.json")
+LIB_PREFIX = "Sources/Factory/Deluge/"        # where the untouched copies live in the library (spec 2.2)
 CARD_NAME = "DSM/FACTORY_RECORD.JSON"
 PREFIX = "SAMPLES/FACTORY/"
 
@@ -26,7 +28,7 @@ class Entry:
     size: int
     mtime: float
     sha1: str = ""           # filled when the copy is made (needs the whole file)
-    library: str = ""        # copy in the library, e.g. FACTORY/DRUMS/KICK/808 KICK.WAV
+    library: str = ""        # copy in the library, e.g. Sources/Factory/Deluge/DRUMS/KICK/808 KICK.WAV
 
 
 @dataclass
@@ -65,7 +67,7 @@ def is_factory_card(rel: str) -> bool:
 
 
 def is_factory_library(rel: str) -> bool:
-    return rel.replace("\\", "/").upper().startswith("FACTORY/")
+    return rel.replace("\\", "/").upper().startswith("SOURCES/FACTORY/")
 
 
 def origin(rel: str, on_card: bool = True) -> str:
@@ -87,8 +89,20 @@ def record_from_existing(card, journal_id: str = "") -> "FactoryRecord":
 
 
 def library_copy_path(card_rel: str) -> str:
-    """SAMPLES/FACTORY/DRUMS/X.WAV -> FACTORY/DRUMS/X.WAV (relative to the library root)."""
-    return "FACTORY/" + card_rel[len(PREFIX):] if card_rel.upper().startswith(PREFIX) else "FACTORY/" + card_rel
+    """SAMPLES/FACTORY/DRUMS/X.WAV -> Sources/Factory/Deluge/DRUMS/X.WAV (relative to the library root)."""
+    rest = card_rel[len(PREFIX):] if card_rel.upper().startswith(PREFIX) else card_rel
+    return LIB_PREFIX + rest
+
+
+def missing_from_library(rec: FactoryRecord, library_root: str) -> list[Entry]:
+    """Factory samples with no copy in Sources › Factory › Deluge (spec 2.6: the folder must be complete).
+    Matched by path, without regard to case, as FAT32 and Windows do."""
+    have = set()
+    base = os.path.join(library_root, *LIB_PREFIX.strip("/").split("/"))
+    for dp, _dns, fns in os.walk(base):
+        for fn in fns:
+            have.add(os.path.relpath(os.path.join(dp, fn), library_root).replace(os.sep, "/").lower())
+    return [e for e in rec.entries if library_copy_path(e.card).lower() not in have]
 
 
 def make(card, moved: list[tuple[str, str]], journal_id: str) -> FactoryRecord:
@@ -107,12 +121,13 @@ def make(card, moved: list[tuple[str, str]], journal_id: str) -> FactoryRecord:
 def load(library_root: str | None, card=None) -> FactoryRecord | None:
     """The library's copy if there is one, else the card's."""
     if library_root:
-        p = os.path.join(library_root, LIB_NAME)
-        try:
-            with open(p, encoding="utf-8") as f:
-                return FactoryRecord.from_json(f.read())
-        except (OSError, ValueError):
-            pass
+        for name in (LIB_NAME, OLD_LIB_NAME):
+            p = os.path.join(library_root, name)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    return FactoryRecord.from_json(f.read())
+            except (OSError, ValueError):
+                pass
     if card is not None and card.exists(CARD_NAME):
         try:
             return FactoryRecord.from_json(card.read_bytes(CARD_NAME, fresh=True).decode("utf-8"))
@@ -143,8 +158,9 @@ def save(rec: FactoryRecord, library_root: str | None, card=None) -> list[str]:
 
 
 def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, progress=None) -> dict:
-    """Copy each factory sample, untouched, into LIBRARY/FACTORY/…, with a checksum. Files already copied and
-    matching are skipped. Returns counts and problems. Saves the record as it goes."""
+    """Copy each factory sample, untouched, into Sources › Factory › Deluge, with a checksum. A copy already there
+    at the same size is kept (Sources are never overwritten) and its checksum recorded; a copy made now is checked
+    against the record's checksum when there is one. Returns counts and problems. Saves the record as it goes."""
     from dsm.importer.mapping import Link
     out = {"copied": 0, "skipped": 0, "problems": []}
     n = len(rec.entries)
@@ -152,9 +168,16 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
     for k, e in enumerate(rec.entries):
         dst_rel = library_copy_path(e.card)
         dst = os.path.join(library_root, *dst_rel.split("/"))
-        if e.sha1 and e.library and os.path.exists(dst) and os.path.getsize(dst) == e.size:
-            out["skipped"] += 1
-            done_bytes += e.size
+        found = _existing(library_root, dst_rel)
+        if found:
+            if os.path.getsize(found) == e.size or not e.size:
+                if not (e.sha1 and e.library):
+                    e.sha1 = e.sha1 or _sha1(found)
+                    e.library = os.path.relpath(found, library_root).replace(os.sep, "/")
+                out["skipped"] += 1
+                done_bytes += e.size
+                continue
+            out["problems"].append(f"In Sources at another size, left as it is: {dst_rel}")
             continue
         if not card.exists(e.card):
             out["problems"].append(f"Not on the card: {e.card}")
@@ -183,10 +206,11 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
                 os.remove(tmp)
                 out["problems"].append(f"Size changed while copying: {e.card}")
                 continue
-            if os.path.exists(dst):                       # a stale copy: unlock it so it can be replaced
-                os.chmod(dst, stat.S_IWRITE | stat.S_IREAD)
+            if e.sha1 and h.hexdigest() != e.sha1:
+                os.remove(tmp)
+                out["problems"].append(f"Not the factory file (checksum differs): {e.card}")
+                continue
             os.replace(tmp, dst)
-            os.chmod(dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)   # locked: read-only
             e.sha1, e.library = h.hexdigest(), dst_rel
             if mapping is not None:
                 mapping.add(Link(card=e.card, library=dst_rel, card_serial=card.facts.serial,
@@ -205,6 +229,28 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
     if progress:
         progress(n, n, "")
     return out
+
+
+def _existing(root: str, rel: str) -> str | None:
+    """The file at rel below root, found without regard to case, or None."""
+    cur = root
+    for part in rel.split("/"):
+        try:
+            names = {n.lower(): n for n in os.listdir(cur)}
+        except OSError:
+            return None
+        if part.lower() not in names:
+            return None
+        cur = os.path.join(cur, names[part.lower()])
+    return cur if os.path.isfile(cur) else None
+
+
+def _sha1(path: str) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
 
 
 def check(rec: FactoryRecord, card) -> list[tuple[str, str]]:

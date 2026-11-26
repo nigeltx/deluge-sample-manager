@@ -12,6 +12,6 @@ a = Analysis([os.path.join(ROOT, "run_dsm.py")], pathex=[ROOT], binaries=binarie
              hiddenimports=["_soundfile_data", "_sounddevice_data", "soxr", "rtmidi"],
              excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"])
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="DelugeSampleManager", console=False,
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="SampleManager", console=False,
           icon=os.path.join(ROOT, "dsm", "icon.ico"))
-coll = COLLECT(exe, a.binaries, a.datas, name="DelugeSampleManager")
+coll = COLLECT(exe, a.binaries, a.datas, name="SampleManager")

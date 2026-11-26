@@ -67,7 +67,8 @@ def library_rel_for(src: str, drop_root: str | None, library_root: str | None, s
         if a.lower().startswith(lr.lower() + os.sep):
             return os.path.relpath(a, lr).replace(os.sep, "/"), False
     inner = os.path.relpath(src, drop_root).replace(os.sep, "/") if drop_root else os.path.basename(src)
-    parts = [source] + ([vendor] if vendor else []) + ([pack] if pack else []) + [inner]
+    # originals go into Sources (spec 2.2): Sources/Paid/<vendor>/<pack>/…
+    parts = ["Sources", source.title()] + ([vendor] if vendor else []) + ([pack] if pack else []) + [inner]
     return "/".join(parts), True
 
 
@@ -82,7 +83,8 @@ def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pa
         if not drop_root and not copy:
             # a library file: its path below SOURCE/VENDOR/PACK is its place in the pack
             parts = lib_rel.split("/")
-            in_pack = "/".join(parts[3:]) if len(parts) > 3 else parts[-1]
+            skip = 4 if parts[0].lower() == "sources" else 3          # Sources/Paid/vendor/pack/…
+            in_pack = "/".join(parts[skip:]) if len(parts) > skip else parts[-1]
         dest = card_path(b.source, vendor, pack, src, in_pack)
         item = ImportItem(src=src, card_rel=dest, library_rel=lib_rel, copy_original=copy, info=info)
         if b.source == "FACTORY":

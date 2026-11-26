@@ -38,10 +38,10 @@ jobs:
       - name: Smoke test (the app starts and imports everything)
         shell: bash
         run: |
-          ./dist/DelugeSampleManager/DelugeSampleManager.exe &
+          ./dist/SampleManager/SampleManager.exe &
           sleep 15
-          tasklist | grep -i DelugeSampleManager
-          taskkill //IM DelugeSampleManager.exe //F
+          tasklist | grep -i SampleManager
+          taskkill //IM SampleManager.exe //F
 
       - name: Build installer
         shell: pwsh
@@ -50,11 +50,17 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           & $iscc "/DMyAppVersion=${{ steps.ver.outputs.v }}" packaging\installer.iss
 
+      - name: Second copy under the old installer name
+        # 0.8.1 (Deluge Sample Manager) looks for a DelugeSampleManager-Setup file; this copy lets it update itself
+        # into Sample Manager. Keep until every PC has moved over.
+        shell: bash
+        run: cp "dist-installer/SampleManager-Setup-${{ steps.ver.outputs.v }}.exe" "dist-installer/DelugeSampleManager-Setup-${{ steps.ver.outputs.v }}.exe"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.v }}-build${{ github.run_number }}
-          name: Deluge Sample Manager ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
+          name: Sample Manager ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
           body_path: RELEASE_NOTES.txt
           files: dist-installer/*.exe
           make_latest: true

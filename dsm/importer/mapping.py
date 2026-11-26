@@ -2,7 +2,7 @@
 
 The library keeps only originals, exactly as bought or downloaded; the card holds the
 converted copies. This file records the link both ways. It lives in the library root
-(_DSM/mapping.json) so it is synced with the library and survives a PC reinstall.
+(_Sample Manager/mapping.json; _DSM before 0.9) so it is synced with the library and survives a PC reinstall.
 """
 from __future__ import annotations
 
@@ -27,7 +27,10 @@ class Link:
 class Mapping:
     def __init__(self, library_root: str | None):
         if library_root and os.path.isdir(library_root):
-            self.path = os.path.join(library_root, "_DSM", "mapping.json")
+            self.path = os.path.join(library_root, "_Sample Manager", "mapping.json")
+            old = os.path.join(library_root, "_DSM", "mapping.json")
+            if not os.path.exists(self.path) and os.path.exists(old):       # before Reorganize (0.9)
+                self.path = old
         else:
             self.path = os.path.join(app_dir(), "mapping.json")
         self.links: list[Link] = []

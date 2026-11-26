@@ -29,27 +29,28 @@ def test_hats_by_length():
     assert g("Paid/V/P/Hat_02.wav") == (["Hat"], False)
 
 
-def _row(rel, frames=44100):
-    return {"rel": rel, "source": "Paid", "level1": "V", "level2": "P", "name": rel.rsplit("/", 1)[1], "size": 1,
-            "mtime": 0, "frames": frames, "rate": 44100, "plays": 1, "native": 1}
+def _row(rel, frames=44100, audio=None):
+    return {"rel": rel, "area": "Sources", "source": "Paid", "level1": "V", "level2": "P", "name": rel.rsplit("/", 1)[1],
+            "file": rel, "audio": audio or rel, "size": 1, "mtime": 0, "frames": frames, "rate": 44100, "plays": 1,
+            "native": 1}
 
 
 def test_db_types_and_user_override(tmp_path):
     db = LibraryDB(str(tmp_path / "l.db"))
-    db.upsert([_row("Paid/V/P/Kick 1.wav"), _row("Paid/V/P/Hat 1.wav", 4000), _row("Paid/V/P/Perc Loop.wav")])
+    db.upsert([_row("Sources/Paid/V/P/Kick 1.wav"), _row("Sources/Paid/V/P/Hat 1.wav", 4000),
+               _row("Sources/Paid/V/P/Perc Loop.wav")])
     assert db.refresh_types() == 3
     assert db.refresh_types() == 0                          # nothing new to work out
-    c = db.type_counts()
-    assert c["Kick"] == 1 and c["Closed hat"] == 1 and c["Percussion"] == 1
     assert [r["name"] for r in db.query(stype="Kick")] == ["Kick 1.wav"]
-    assert db.count(stype=st.DRUMS) == 3
-    assert db.count(stype=st.DRUMS, loop=True) == 1
-    db.set_user_type(["Paid/V/P/Kick 1.wav"], ["Snare"], False)
-    assert db.type_counts().get("Kick") is None and db.type_counts()["Snare"] == 1
+    assert len(db.query(stype=st.DRUMS, loop=True)) == 1
+    k = "Sources/Paid/V/P/Kick 1.wav"
+    assert db.types_for(k, k) == (["Kick"], False)
+    db.set_user_type([k], ["Snare"], False)                 # by audio identity
+    assert db.types_for(k, k) == (["Snare"], False)
     r = db.query(stype="Snare")[0]
     assert r["type_by_user"] == 1
-    db.upsert([_row("Paid/V/P/Kick 1.wav", 9999)])         # the file changed: the guess is redone …
+    db.upsert([_row(k, 9999)])                              # the file changed: the guess is redone …
     db.refresh_types()
     assert db.query(stype="Snare")[0]["name"] == "Kick 1.wav"   # … but the user's choice stays
-    db.clear_user_type(["Paid/V/P/Kick 1.wav"])
-    assert db.type_counts()["Kick"] == 1
+    db.clear_user_type([k])
+    assert db.types_for(k, k) == (["Kick"], False)

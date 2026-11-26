@@ -232,7 +232,7 @@ class DelugeLink:
 
     # ---- session and listing
     def start_session(self):
-        body, _ = self.request("session", {"tag": "DelugeSampleManager"})
+        body, _ = self.request("session", {"tag": "SampleManager"})
         lo, hi = body.get("midMin"), body.get("midMax")
         if isinstance(lo, int) and isinstance(hi, int) and 0 < lo <= hi < 128:
             self.mid_lo, self.mid_hi = lo, hi

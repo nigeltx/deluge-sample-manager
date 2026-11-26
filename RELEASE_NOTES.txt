@@ -1,3 +1,25 @@
+Sample Manager. Version 0.9.0 — the new name, and the library in three folders.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have (Deluge Sample Manager
+0.8.1 updates itself into it). Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+- Deluge Sample Manager is now Sample Manager: the window, the program, the installer, the GitHub repository and
+  the app data folder (%LOCALAPPDATA%\SampleManager, moved over on first start). It installs over the old app.
+- Studio › Samples has three folders, as in the Patch Manager. Sources keeps everything as it came — packs as
+  folders or zips, read in place — and is never changed by the app. Samples holds every sample once, in a folder
+  for its type, with loops in a Loops folder inside it. Backups holds the Deluge's backups; it is never read.
+- Every file in Sources has a fingerprint. Library ▾ › Sources changed or missing… lists anything changed or
+  gone outside the app; until you decide, the app keeps using what it read before.
+- Rebuild (toolbar) fills Samples from Sources and shows its plan first. Files taken out go to
+  _Sample Manager › Removed. Set type… now moves the file at the next Rebuild.
+- Library ▾ › Reorganize library… does the one-time move: makes Samples and Backups, renames _DSM to
+  _Sample Manager, points the mapping at Sources, and copies the Deluge factory samples missing from
+  Sources › Factory › Deluge from the card (open the card first). It offers itself on first start.
+- Get from Deluge… keeps samples made on the Deluge (recordings, resamples, samples put there by hand) in
+  Sources › User › <date> Deluge read.
+- A sample is on the Deluge when its audio is, wherever its copies are; rows on the card are green and each type
+  in SAMPLES shows how many are on the Deluge.
+
 Updates itself. Version 0.8.1.
 
 Download the DelugeSampleManager-Setup .exe below and run it; it updates the version you have.

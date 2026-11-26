@@ -6,17 +6,17 @@
 
 [Setup]
 AppId={{6B0E8A1C-3C2D-4C7B-9E55-DE1C0E5A7A11}
-AppName=Deluge Sample Manager
+AppName=Sample Manager
 AppVersion={#MyAppVersion}
 AppPublisher=Nigel's studio
-DefaultDirName={localappdata}\Programs\Deluge Sample Manager
-DefaultGroupName=Deluge Sample Manager
+DefaultDirName={localappdata}\Programs\Sample Manager
+DefaultGroupName=Sample Manager
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist-installer
-OutputBaseFilename=DelugeSampleManager-Setup-{#MyAppVersion}
+OutputBaseFilename=SampleManager-Setup-{#MyAppVersion}
 SetupIconFile=..\dsm\icon.ico
-UninstallDisplayIcon={app}\DelugeSampleManager.exe
+UninstallDisplayIcon={app}\SampleManager.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -26,13 +26,20 @@ CloseApplications=yes
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "..\dist\DelugeSampleManager\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\SampleManager\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{group}\Deluge Sample Manager"; Filename: "{app}\DelugeSampleManager.exe"
-Name: "{userdesktop}\Deluge Sample Manager"; Filename: "{app}\DelugeSampleManager.exe"; Tasks: desktopicon
+Name: "{group}\Sample Manager"; Filename: "{app}\SampleManager.exe"
+Name: "{userdesktop}\Sample Manager"; Filename: "{app}\SampleManager.exe"; Tasks: desktopicon
+
+[InstallDelete]
+; before 0.9 the app was Deluge Sample Manager: take away its program and shortcuts (same AppId, so this updates it)
+Type: files; Name: "{app}\DelugeSampleManager.exe"
+Type: files; Name: "{group}\Deluge Sample Manager.lnk"
+Type: files; Name: "{userdesktop}\Deluge Sample Manager.lnk"
+Type: files; Name: "{userprograms}\Deluge Sample Manager.lnk"
 
 [Run]
-Filename: "{app}\DelugeSampleManager.exe"; Description: "Start Deluge Sample Manager"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\SampleManager.exe"; Description: "Start Sample Manager"; Flags: nowait postinstall skipifsilent
 ; a silent install is an update from inside the app (dsm/updater.py): start the new version again
-Filename: "{app}\DelugeSampleManager.exe"; Flags: nowait; Check: WizardSilent
+Filename: "{app}\SampleManager.exe"; Flags: nowait; Check: WizardSilent
