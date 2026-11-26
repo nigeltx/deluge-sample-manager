@@ -128,6 +128,22 @@ class MainWindow(QMainWindow):
         lg.setToolTip("Open the folder with the app's log file")
         lg.triggered.connect(lambda: open_folder(log_dir()))
         tb.addAction(lg)
+        from PySide6.QtWidgets import QToolButton
+        from .. import APP_NAME, __version__
+        from ..updater import UpdateManager
+
+        def _save(k, v):
+            self.settings[k] = v
+            self.settings.save()
+        self.updates = UpdateManager(self, APP_NAME, "nigeltx/deluge-sample-manager", "DelugeSampleManager-Setup-",
+                                     __version__, self.settings.get, _save)
+        hb = QToolButton(); hb.setText("Help ▾"); hb.setPopupMode(QToolButton.InstantPopup)
+        hm = QMenu(self)
+        hm.addAction("Check for updates…", lambda: self.updates.check(asked=True))
+        hm.addAction("Update settings…", self.updates.settings_dialog)
+        hm.addAction(f"About {APP_NAME} {__version__}", lambda: QMessageBox.information(
+            self, APP_NAME, f"{APP_NAME} {__version__}\nnigeltx/deluge-sample-manager on GitHub"))
+        hb.setMenu(hm); tb.addWidget(hb)
         tb.addSeparator()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search the library — e.g.  kick 808   (or 'unused' for the card)")

@@ -34,3 +34,5 @@ Name: "{userdesktop}\Deluge Sample Manager"; Filename: "{app}\DelugeSampleManage
 
 [Run]
 Filename: "{app}\DelugeSampleManager.exe"; Description: "Start Deluge Sample Manager"; Flags: nowait postinstall skipifsilent
+; a silent install is an update from inside the app (dsm/updater.py): start the new version again
+Filename: "{app}\DelugeSampleManager.exe"; Flags: nowait; Check: WizardSilent

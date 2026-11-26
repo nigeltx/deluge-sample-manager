@@ -17,6 +17,7 @@ def main() -> int:
     app.setStyle("Fusion")
     w = MainWindow(Settings.load())
     w.show()
+    w.updates.start()           # checks GitHub for a new version, as set in Help ▾ › Update settings
     return app.exec()
 
 
