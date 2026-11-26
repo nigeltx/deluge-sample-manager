@@ -141,11 +141,16 @@ def plan(root: str, mapping=None, rec=None, card=None, known_audio: set | None =
             if not link.library:
                 continue
             new = _strip(link.library)
-            path_now = os.path.join(root, *new.split(src.SEP)[0].split("/"))
-            after_flatten = os.path.join(sources, *new.split(src.SEP)[0].split("/")) if sources else None
-            if os.path.exists(path_now) or (after_flatten and os.path.exists(after_flatten)):
-                if new != link.library:
-                    moves.append((link.library, new))
+            file_part, _, inner = new.partition(src.SEP)
+            found = None
+            for base in ([sources] if sources else []) + [root]:
+                p = _real(base, *file_part.split("/"))
+                if p and os.path.isfile(p):                 # its place as spelled on disk, after any flatten
+                    found = os.path.relpath(p, base).replace(os.sep, "/") + (src.SEP + inner if inner else "")
+                    break
+            if found:
+                if found != link.library:
+                    moves.append((link.library, found))
                 continue
             if by_name is None:
                 by_name = _files_by_name(sources or root) if sources else _files_by_name(root)
