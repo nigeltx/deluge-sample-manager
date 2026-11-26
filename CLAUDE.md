@@ -20,8 +20,8 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   `scanner.py` fingerprints (size + SHA-1, states ok/changed/missing) and Samples; `db.py` SQLite at
   %LOCALAPPDATA%\SampleManager\library.db (user types by audio identity); `rebuild.py` Samples from Sources (plan/apply);
   `reorganize.py` the one-time move from 0.8; `getdevice.py` Get from the Deluge
-- `dsm/updater.py` — self-update from GitHub releases (same file as the Patch Manager's; repo must be public; `dsm.REPO` stays the old name nigeltx/deluge-sample-manager until
-  Nigel renames it on GitHub to sample-manager — the proxy can't rename repos — then GitHub redirects the old name).
+- `dsm/updater.py` — self-update from GitHub releases (same file as the Patch Manager's; repo nigeltx/sample-manager must be public;
+  renamed from deluge-sample-manager on 26 Nov 2026 — GitHub redirects the old name, which 0.8.1 still uses).
   The workflow also publishes the installer as DelugeSampleManager-Setup-x.exe so 0.8.1 can update across the rename
 - `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (All / Factory / Free / Paid → vendor → pack, with counts), SMART LISTS, then ON THE DELUGE (card folders); middle = sample list (green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
