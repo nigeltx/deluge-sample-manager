@@ -1,18 +1,17 @@
-"""Index the library: Sources (with fingerprints, and samples inside zips) and Samples.
+"""Index the library: Factory, Paid, Free and User, with fingerprints, and samples inside zips (spec v2.2 2.2).
 
-Sources (spec 2.2). Every file on disk in Sources — an audio file or a zip — has a fingerprint: its size and a
-SHA-1 of its bytes. A file is read again only when its size or date changes; then:
+Every file on disk — an audio file or a zip — has a fingerprint: its size and a SHA-1 of its bytes. A file is read
+again only when its size or date changes; then:
   • same SHA-1 (Drive only touched the date): nothing to do;
   • different SHA-1: it is marked *changed* and the app keeps using what it read before until you decide
-    (Sources changed or missing… → Use it as it is now, db.accept_change);
-  • gone: marked *missing*, again keeping what was read, except in Sources › User, where a deletion is meant.
+    (Library changed or missing… → Use it as it is now, db.accept_change);
+  • gone: marked *missing*, again keeping what was read, except in User, where a deletion is meant.
 A file that went missing while a new file with the same SHA-1 appeared was moved or renamed: the old one is
-forgotten without asking.
+forgotten without asking. After the scan the by-type view is worked out again (db.refresh_view).
 
-Samples (spec 2.3) is the app's own folder; its files are read like any other, by size and date.
-
-Backups, Archive and the app's folder are never read. Reading a file opens it, so on a Google Drive folder set
-to "stream" Drive downloads each new file once; after the first scan only new or changed files are read.
+Backups, Archive and the app's folder are never read, nor anything at the root outside the four folders.
+Reading a file opens it, so on a Google Drive folder set to "stream" Drive downloads each new file once; after the
+first scan only new or changed files are read.
 """
 from __future__ import annotations
 
@@ -49,7 +48,7 @@ def read_source_file(rel: str, full: str) -> tuple[str, list[dict]]:
                 for mrel, data in src.zip_members(z, rel):
                     rows.append(row_for(mrel, data, len(data), st.st_mtime, rel))
         except zipfile.BadZipFile as e:
-            rows.append({"rel": rel + src.SEP + "(unreadable zip)", "area": layout.SOURCES,
+            rows.append({"rel": rel + src.SEP + "(unreadable zip)", "area": src.AREA,
                          "source": src.split_rel(rel)[1], "name": os.path.basename(rel), "file": rel,
                          "size": st.st_size, "mtime": st.st_mtime, "error": f"Not a readable zip: {e}"})
     else:
@@ -65,8 +64,7 @@ def scan(db: LibraryDB, root: str, progress=None) -> dict:
     if not root or not os.path.isdir(root):
         out["missing_root"] = True
         return out
-    sdir = layout.find_child(root, layout.SOURCES)
-    files = list(src.walk_files(os.path.join(root, sdir), root)) if sdir else []
+    files = [f for _t, d in layout.source_dirs(root) for f in src.walk_files(d, root)]
     known = db.source_files()
     seen, new_shas = set(), {}
     for k, (rel, full) in enumerate(files):
@@ -106,46 +104,19 @@ def scan(db: LibraryDB, root: str, progress=None) -> dict:
         if r["sha1"] and r["sha1"] in new_shas:
             db.remove_file(rel)
             out["moved"] += 1
-        elif rel.lower().startswith("sources/user/"):
+        elif rel.lower().startswith("user/"):
             db.remove_file(rel)
             out["removed"] += 1
         elif r["state"] != "missing":
             db.set_source_file(rel, r["size"], r["mtime"], r["sha1"], "missing")
             out["missing"] += 1
-    out["samples"] = scan_samples(db, root, progress)
     db.refresh_types(progress)
     db.adopt_old_user_types()
+    out["listed"] = db.refresh_view()
     save_fingerprints(db, root)
     if progress:
         progress(len(files), len(files), "")
     return out
-
-
-def scan_samples(db: LibraryDB, root: str, progress=None) -> int:
-    """Index the Samples folder. Returns how many files were read."""
-    sdir = layout.find_child(root, layout.SAMPLES)
-    known = db.known_samples(layout.SAMPLES)
-    seen, rows = set(), []
-    if sdir:
-        for rel, full in src.walk_files(os.path.join(root, sdir), root):
-            if src.is_zip(rel):
-                continue
-            seen.add(rel)
-            try:
-                st = os.stat(full)
-            except OSError:
-                continue
-            old = known.get(rel)
-            if old and old[0] == st.st_size and abs((old[1] or 0) - st.st_mtime) < 0.01:
-                continue
-            with open(full, "rb") as f:
-                rows.append(row_for(rel, f.read(), st.st_size, st.st_mtime, rel))
-            if len(rows) >= 100:
-                db.upsert(rows)
-                rows = []
-    db.upsert(rows)
-    db.remove([r for r in known if r not in seen])
-    return len(seen)
 
 
 def save_fingerprints(db: LibraryDB, root: str):

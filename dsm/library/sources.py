@@ -1,9 +1,9 @@
 """Reading the library's files: plain files and samples inside zips, the audio identity, and the audition cache.
 
 Library paths ("rel") are relative to the library root (Studio\\Samples), with forward slashes. A sample inside
-a zip is written  Sources/Paid/Dark Mass.zip::Kicks/BD 01.wav  and one in a zip inside a zip has two "::".
-Zips are never unpacked in Sources (spec 2.2); rebuild.py unpacks a copy into Samples, and auditioning one
-unpacks it to a cache folder on the PC that keeps the most recently heard 2 GB.
+a zip is written  Paid/Dark Mass.zip::Kicks/BD 01.wav  and one in a zip inside a zip has two "::".
+Zips are never unpacked in the library (spec 2.2); auditioning or sending one unpacks it to a cache folder on the
+PC that keeps the most recently used 2 GB.
 
 The identity of a sample is a hash of its audio alone (spec 2.3): the channels, bit depth and rate and the
 bytes of the audio data — not the header's other chunks — so a copy whose header was fixed or whose
@@ -196,24 +196,21 @@ def prune_cache(cache_dir: str, limit: int = CACHE_LIMIT) -> int:
 
 
 # ------------------------------------------------------------------ where a path sits
+AREA = "Library"
+
+
 def split_rel(rel: str):
     """(area, source, level1, level2) for the left pane.
-    Sources/Paid/Dark Mass.zip::Kicks/BD.wav → ("Sources", "Paid", "Dark Mass", "Kicks")
-    Sources/Factory/Deluge/DRUMS/KICK/X.WAV → ("Sources", "Factory", "Deluge", "DRUMS")
-    Samples/Kick/Loops/X.wav               → ("Samples", "Kick", "Loops", "")"""
+    Paid/Dark Mass.zip::Snares/Snare 1.wav  → ("Library", "Paid", "Dark Mass", "Snares")
+    Factory/Deluge/DRUMS/KICK/X.WAV         → ("Library", "Factory", "Deluge", "DRUMS")"""
+    parts = rel.split(SEP)
     comps = []
-    for i, part in enumerate(rel.split(SEP)):
+    for i, part in enumerate(parts):
         bits = part.split("/")
-        if i < len(rel.split(SEP)) - 1:
-            bits[-1] = bits[-1][:-4] if is_zip(bits[-1]) else bits[-1]
+        if i < len(parts) - 1 and is_zip(bits[-1]):
+            bits[-1] = bits[-1][:-4]
         comps += bits
     comps = comps[:-1]                               # folders (and zips) only
-    area = comps[0] if comps else ""
-    src = comps[1] if len(comps) > 1 else ""
-    l1 = comps[2] if len(comps) > 2 else ""
-    l2 = comps[3] if len(comps) > 3 else ""
-    if area.lower() == layout.SAMPLES.lower():
-        return layout.SAMPLES, src, l1 if l1.lower() == layout.LOOPS.lower() else "", ""
-    if area.lower() == layout.SOURCES.lower():
-        return layout.SOURCES, src.title() if src.lower() in ("factory", "paid", "free", "user") else src, l1, l2
-    return area, src, l1, l2
+    src = comps[0] if comps else ""
+    src = src.title() if src.lower() in ("factory", "paid", "free", "user") else src
+    return AREA, src, comps[1] if len(comps) > 1 else "", comps[2] if len(comps) > 2 else ""

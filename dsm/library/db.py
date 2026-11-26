@@ -1,16 +1,18 @@
-"""The library index: one row per sample in Sources (including samples inside zips) and per file in Samples.
+"""The library index: one row per sample in the library (including samples inside zips).
 
 Lives at %LOCALAPPDATA%\\SampleManager\\library.db and can always be rebuilt by rescanning. scanner.py keeps it
-up to date; rebuild.py reads it to work out what Samples should hold.
+up to date.
 
 Tables
-  sample       one row per sample: rel (path below the library root, "::" for inside a zip), area (Sources or
-               Samples), source/level1/level2 for the left pane, file (the file on disk that holds it), audio
-               (identity, sources.identity) and the header facts.
-  source_file  one row per file on disk in Sources (an audio file or a zip): size, date and SHA-1 (the
-               fingerprint, spec 2.2) and its state: ok, changed (new_sha1 is what is there now) or missing.
-  stype        the app's type guess for each Sources sample (types.py).
+  sample       one row per copy of a sample: rel (path below the library root, "::" for inside a zip),
+               source/level1/level2 for the left pane, file (the file on disk that holds it), audio (identity,
+               sources.identity) and the header facts. area is always "Library" (0.9.0 also had Samples).
+  source_file  one row per file on disk (an audio file or a zip): size, date and SHA-1 (the fingerprint,
+               spec 2.2) and its state: ok, changed (new_sha1 is what is there now) or missing.
+  stype        the app's type guess for each copy (types.py).
   user_type    types set by hand (Set type…), by audio identity, so they follow the sample wherever its copies are.
+  listed       the by-type view (spec 2.3): one row per sample — the copy that counts — with its type list and
+               whether it is a loop. Worked out again by refresh_view() after every scan and Set type.
 """
 from __future__ import annotations
 
@@ -44,6 +46,8 @@ CREATE TABLE IF NOT EXISTS stype (
 CREATE TABLE IF NOT EXISTS user_type (
     audio TEXT PRIMARY KEY, types TEXT, loop INTEGER
 );
+CREATE TABLE IF NOT EXISTS listed (audio TEXT PRIMARY KEY, rel TEXT, folder TEXT, loop INTEGER);
+CREATE INDEX IF NOT EXISTS listed_folder ON listed(folder);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
 
@@ -51,11 +55,10 @@ SCHEMA_VERSION = "2"
 SOURCE_ORDER = {"Factory": 0, "Paid": 1, "Free": 2, "User": 3}
 
 # a Sources row's types: the user's (by audio) or the guess (by rel). A Samples row's type is its folder.
-SELECT = """SELECT s.*,
-  CASE WHEN s.area = 'Samples' THEN ',' || s.source || ',' ELSE COALESCE(u.types, g.types) END AS types,
-  CASE WHEN s.area = 'Samples' THEN (s.level1 = 'Loops') ELSE COALESCE(u.loop, g.loop) END AS is_loop,
-  g.why AS type_why, (u.audio IS NOT NULL) AS type_by_user
-FROM sample s LEFT JOIN stype g ON g.rel = s.rel LEFT JOIN user_type u ON u.audio = s.audio"""
+SELECT = """SELECT s.*, COALESCE(u.types, g.types) AS types, COALESCE(u.loop, g.loop) AS is_loop,
+  g.why AS type_why, (u.audio IS NOT NULL) AS type_by_user, l.folder AS listed_folder
+FROM sample s LEFT JOIN stype g ON g.rel = s.rel LEFT JOIN user_type u ON u.audio = s.audio
+LEFT JOIN listed l ON l.audio = s.audio AND l.rel = s.rel"""
 
 COLS = ["rel", "area", "source", "level1", "level2", "name", "file", "audio", "size", "mtime", "container", "header",
         "rate", "bits", "channels", "frames", "loop_start", "loop_end", "root_note", "plays", "native", "problems",
@@ -123,7 +126,7 @@ class LibraryDB:
 
     def clear(self):
         with self.lock:
-            for t in ("sample", "stype", "source_file"):
+            for t in ("sample", "stype", "source_file", "listed"):
                 self.con.execute(f"DELETE FROM {t}")
             self.con.commit()
 
@@ -167,10 +170,16 @@ class LibraryDB:
         return out
 
     def query(self, area=None, source=None, level1=None, level2=None, text: str = "", rels=None, wont_play=False,
-              stype=None, loop=None, audios=None, limit: int = 20000) -> list[sqlite3.Row]:
+              stype=None, loop=None, audios=None, folder=None, listed=False, limit: int = 20000) -> list[sqlite3.Row]:
         """stype: one type name or a list (any matches). loop: True / False / None for both. audios: a set of
-        identities to keep."""
+        identities to keep. listed: only the copy that counts of each sample (the by-type view); folder: one type
+        list of that view (Kick … Unknown)."""
         sql, args = "SELECT * FROM (" + SELECT + ") s WHERE 1=1", []
+        if listed or folder:
+            sql += " AND s.listed_folder IS NOT NULL"
+        if folder:
+            sql += " AND s.listed_folder = ?"
+            args.append(folder)
         for col, val in (("area", area), ("source", source), ("level1", level1), ("level2", level2)):
             if val is not None:
                 sql += f" AND s.{col} = ?"
@@ -215,13 +224,48 @@ class LibraryDB:
         return out
 
     def source_audios(self) -> set[str]:
-        return {r[0] for r in self.q("SELECT DISTINCT audio FROM sample WHERE area = 'Sources' AND audio IS NOT NULL")}
+        return {r[0] for r in self.q("SELECT DISTINCT audio FROM sample WHERE audio IS NOT NULL "
+                                     "AND area != 'Samples'")}     # 0.9.0's Samples copies are not sources
+
+    # ------------------------------------------------------------------ the by-type view (spec 2.3)
+    def refresh_view(self) -> int:
+        """Work out the listed table again: one row per sample, the copy that counts, in its type list."""
+        from dsm.library import layout
+        rows = []
+        for a, r in self.wanted().items():
+            types = stypes.unpack(r["types"]) or [stypes.UNKNOWN]
+            rows.append((a, r["rel"], layout.type_folder(types), int(bool(r["is_loop"]))))
+        with self.lock:
+            self.con.execute("DELETE FROM listed")
+            self.con.executemany("INSERT INTO listed (audio, rel, folder, loop) VALUES (?,?,?,?)", rows)
+            self.con.commit()
+        return len(rows)
+
+    def flatten_paths(self) -> int:
+        """After Reorganize moves Sources\\* up a level (0.9.0 → 0.9.1): drop the "Sources/" prefix everywhere and
+        forget 0.9.0's Samples folder, so the next scan finds every file where it was and reads nothing again."""
+        from dsm.library import sources as src
+        n = 0
+        with self.lock:
+            self.con.execute("DELETE FROM stype WHERE rel IN (SELECT rel FROM sample WHERE area = 'Samples')")
+            self.con.execute("DELETE FROM sample WHERE area = 'Samples'")
+            for r in self.con.execute("SELECT rel, file FROM sample WHERE rel LIKE 'Sources/%'").fetchall():
+                new, nf = r["rel"][8:], (r["file"] or "")[8:] if (r["file"] or "").startswith("Sources/") else r["file"]
+                area, so, l1, l2 = src.split_rel(new)
+                self.con.execute("UPDATE sample SET rel=?, file=?, area=?, source=?, level1=?, level2=? WHERE rel=?",
+                                 (new, nf, area, so, l1, l2, r["rel"]))
+                self.con.execute("UPDATE stype SET rel=? WHERE rel=?", (new, r["rel"]))
+                n += 1
+            self.con.execute("UPDATE source_file SET path = substr(path, 9) WHERE path LIKE 'Sources/%'")
+            self.con.execute("UPDATE sample SET area = 'Library'")
+            self.con.commit()
+        return n
 
     def wanted(self) -> dict[str, sqlite3.Row]:
         """{audio: the copy in Sources that counts} — the first in Factory, Paid, Free, User order, then by path.
         Files whose state is missing still count, as read before (spec 2.2)."""
         best: dict[str, tuple] = {}
-        for r in self.q(SELECT + " WHERE s.area = 'Sources' AND s.audio IS NOT NULL AND s.error IS NULL"):
+        for r in self.q(SELECT + " WHERE s.audio IS NOT NULL AND s.error IS NULL"):
             key = (SOURCE_ORDER.get(r["source"], 9), r["rel"].lower())
             if r["audio"] not in best or key < best[r["audio"]][0]:
                 best[r["audio"]] = (key, r)
@@ -233,7 +277,7 @@ class LibraryDB:
         with self.lock:
             todo = self.con.execute(
                 "SELECT s.rel, s.frames, s.rate FROM sample s LEFT JOIN stype g ON g.rel = s.rel "
-                "WHERE s.area = 'Sources' AND (g.rel IS NULL OR g.ver IS NOT ?)", (stypes.RULES_VERSION,)).fetchall()
+                "WHERE (g.rel IS NULL OR g.ver IS NOT ?)", (stypes.RULES_VERSION,)).fetchall()
         out = []
         for k, r in enumerate(todo):
             secs = r["frames"] / r["rate"] if r["frames"] and r["rate"] else None
@@ -279,11 +323,13 @@ class LibraryDB:
             self.con.executemany("INSERT OR REPLACE INTO user_type (audio, types, loop) VALUES (?,?,?)",
                                  [(a, stypes.pack(types), int(loop)) for a in audios])
             self.con.commit()
+        self.refresh_view()
 
     def clear_user_type(self, audios):
         with self.lock:
             self.con.executemany("DELETE FROM user_type WHERE audio = ?", [(a,) for a in audios])
             self.con.commit()
+        self.refresh_view()
 
     def user_types(self) -> dict[str, tuple[str, int]]:
         return {r["audio"]: (r["types"], r["loop"]) for r in self.q("SELECT * FROM user_type")}
@@ -295,12 +341,16 @@ class LibraryDB:
             self.con.commit()
 
     def type_counts(self, loop=None) -> dict[str, int]:
-        """{type folder: n} for Samples."""
-        sql, args = "SELECT source, COUNT(*) n FROM sample WHERE area = 'Samples'", []
+        """{type list: n samples} for the by-type view."""
+        sql, args = "SELECT folder, COUNT(*) n FROM listed", []
         if loop is not None:
-            sql += " AND (level1 = 'Loops') = ?"
+            sql += " WHERE loop = ?"
             args.append(int(bool(loop)))
-        return {r["source"]: r["n"] for r in self.q(sql + " GROUP BY 1", args)}
+        return {r["folder"]: r["n"] for r in self.q(sql + " GROUP BY 1", args)}
+
+    def listed_folders(self) -> dict[str, str]:
+        """{audio: type list} for every listed sample."""
+        return {r["audio"]: r["folder"] for r in self.q("SELECT audio, folder FROM listed")}
 
     def all_rels(self) -> list[str]:
         return [r[0] for r in self.q("SELECT rel FROM sample")]

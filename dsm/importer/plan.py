@@ -59,31 +59,36 @@ def expand(paths: list[str]) -> list[tuple[str, str | None]]:
     return out
 
 
-def library_rel_for(src: str, drop_root: str | None, library_root: str | None, source: str, vendor: str, pack: str):
-    """(relative path in the library, True if it must be copied there)."""
+def library_rel_for(src: str, drop_root: str | None, library_root: str | None, source: str, vendor: str, pack: str,
+                    aliases=None):
+    """(relative path in the library, True if it must be copied there). aliases maps a file unpacked to the PC cache
+    from a zip in the library to the sample's library path (Paid/Pack.zip::Kicks/BD.wav)."""
+    if aliases and src in aliases:
+        return aliases[src], False
     if library_root:
         lr = os.path.abspath(library_root)
         a = os.path.abspath(src)
         if a.lower().startswith(lr.lower() + os.sep):
             return os.path.relpath(a, lr).replace(os.sep, "/"), False
     inner = os.path.relpath(src, drop_root).replace(os.sep, "/") if drop_root else os.path.basename(src)
-    # originals go into Sources (spec 2.2): Sources/Paid/<vendor>/<pack>/…
-    parts = ["Sources", source.title()] + ([vendor] if vendor else []) + ([pack] if pack else []) + [inner]
+    # originals go into the library (spec 2.1): Paid/<vendor>/<pack>/…
+    parts = [source.title()] + ([vendor] if vendor else []) + ([pack] if pack else []) + [inner]
     return "/".join(parts), True
 
 
 def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pack: str, profile: Profile,
-               card: Card, library_root: str | None, mapping: Mapping, taken_extra=(), infos=None) -> ImportBatch:
+               card: Card, library_root: str | None, mapping: Mapping, taken_extra=(), infos=None,
+               aliases=None) -> ImportBatch:
     b = ImportBatch(source=source.upper(), vendor=vendor, pack=pack, profile=profile)
     taken = set(card.files) | {t.lower() for t in taken_extra}
     for src, drop_root in files:
         info = (infos or {}).get(src) or inspect(src)
-        lib_rel, copy = library_rel_for(src, drop_root, library_root, b.source, vendor, pack)
+        lib_rel, copy = library_rel_for(src, drop_root, library_root, b.source, vendor, pack, aliases)
         in_pack = os.path.relpath(src, drop_root).replace(os.sep, "/") if drop_root else None
         if not drop_root and not copy:
             # a library file: its path below SOURCE/VENDOR/PACK is its place in the pack
-            parts = lib_rel.split("/")
-            skip = 4 if parts[0].lower() == "sources" else 3          # Sources/Paid/vendor/pack/…
+            parts = lib_rel.replace("::", "/").split("/")
+            skip = 3                                                   # Paid/vendor/pack/…
             in_pack = "/".join(parts[skip:]) if len(parts) > skip else parts[-1]
         dest = card_path(b.source, vendor, pack, src, in_pack)
         item = ImportItem(src=src, card_rel=dest, library_rel=lib_rel, copy_original=copy, info=info)

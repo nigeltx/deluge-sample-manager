@@ -2,7 +2,7 @@
 
 Made when the factory library is moved under SAMPLES/FACTORY. Each entry holds the sample's original
 path, its path now, its size and date, and (once copied) a SHA-1 checksum and the path of the copy in the
-library's Sources › Factory › Deluge folder. The record is saved in the library (_Sample Manager/factory-record.json,
+library's Factory › Deluge folder. The record is saved in the library (_Sample Manager/factory-record.json,
 (_DSM before 0.9), synced with
 Drive) and on the card (DSM/FACTORY_RECORD.JSON, outside SAMPLES so the Deluge's browser never shows it).
 """
@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 
 LIB_NAME = os.path.join("_Sample Manager", "factory-record.json")
 OLD_LIB_NAME = os.path.join("_DSM", "factory-record.json")
-LIB_PREFIX = "Sources/Factory/Deluge/"        # where the untouched copies live in the library (spec 2.2)
+LIB_PREFIX = "Factory/Deluge/"                # where the untouched copies live in the library (spec v2.2 2.1)
 CARD_NAME = "DSM/FACTORY_RECORD.JSON"
 PREFIX = "SAMPLES/FACTORY/"
 
@@ -67,7 +67,7 @@ def is_factory_card(rel: str) -> bool:
 
 
 def is_factory_library(rel: str) -> bool:
-    return rel.replace("\\", "/").upper().startswith("SOURCES/FACTORY/")
+    return rel.replace("\\", "/").upper().startswith("FACTORY/")
 
 
 def origin(rel: str, on_card: bool = True) -> str:
@@ -89,16 +89,24 @@ def record_from_existing(card, journal_id: str = "") -> "FactoryRecord":
 
 
 def library_copy_path(card_rel: str) -> str:
-    """SAMPLES/FACTORY/DRUMS/X.WAV -> Sources/Factory/Deluge/DRUMS/X.WAV (relative to the library root)."""
+    """SAMPLES/FACTORY/DRUMS/X.WAV -> Factory/Deluge/DRUMS/X.WAV (relative to the library root)."""
     rest = card_rel[len(PREFIX):] if card_rel.upper().startswith(PREFIX) else card_rel
     return LIB_PREFIX + rest
 
 
 def missing_from_library(rec: FactoryRecord, library_root: str) -> list[Entry]:
-    """Factory samples with no copy in Sources › Factory › Deluge (spec 2.6: the folder must be complete).
+    """Factory samples with no copy in Factory › Deluge (spec 2.1: the folder must be complete).
     Matched by path, without regard to case, as FAT32 and Windows do."""
     have = set()
-    base = os.path.join(library_root, *LIB_PREFIX.strip("/").split("/"))
+    base = library_root
+    for part in LIB_PREFIX.strip("/").split("/"):          # Factory/Deluge, matched without regard to case
+        try:
+            names = {n.lower(): n for n in os.listdir(base)}
+        except OSError:
+            names = {}
+        if part.lower() not in names:
+            return list(rec.entries)
+        base = os.path.join(base, names[part.lower()])
     for dp, _dns, fns in os.walk(base):
         for fn in fns:
             have.add(os.path.relpath(os.path.join(dp, fn), library_root).replace(os.sep, "/").lower())
@@ -158,7 +166,7 @@ def save(rec: FactoryRecord, library_root: str | None, card=None) -> list[str]:
 
 
 def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, progress=None) -> dict:
-    """Copy each factory sample, untouched, into Sources › Factory › Deluge, with a checksum. A copy already there
+    """Copy each factory sample, untouched, into Factory › Deluge, with a checksum. A copy already there
     at the same size is kept (Sources are never overwritten) and its checksum recorded; a copy made now is checked
     against the record's checksum when there is one. Returns counts and problems. Saves the record as it goes."""
     from dsm.importer.mapping import Link

@@ -20,8 +20,9 @@ GREY, AMBER, GREEN = QColor("#6b6f77"), QColor("#9a3412"), QColor("#065f46")
 
 
 class ImportDialog(QDialog):
-    def __init__(self, files, infos, card, library_root, mapping, pending_dests, parent=None):
+    def __init__(self, files, infos, card, library_root, mapping, pending_dests, parent=None, aliases=None):
         super().__init__(parent)
+        self.aliases = aliases or {}
         self.files, self.infos, self.card = files, infos, card
         self.library_root, self.mapping, self.pending = library_root, mapping, pending_dests
         self.batch: ImportBatch | None = None
@@ -126,7 +127,7 @@ class ImportDialog(QDialog):
         self.src_hint.setText("")
         b = build_plan(self.files, source, self.vendor.text().strip(), self.pack.text().strip(),
                        self._current_profile(), self.card, self.library_root, self.mapping,
-                       taken_extra=self.pending, infos=self.infos)
+                       taken_extra=self.pending, infos=self.infos, aliases=self.aliases)
         self.batch = b
         self.table.setRowCount(len(b.items))
         for r, it in enumerate(b.items):

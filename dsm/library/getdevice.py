@@ -1,10 +1,10 @@
-"""Get from device (spec 4.5): read a device and keep, in Sources › User, the samples that are in no source.
+"""Get from device (spec 4.5): read a device and keep, in User, the samples that are nowhere in the library.
 
 For the Deluge: every audio file under SAMPLES/ except SAMPLES/FACTORY (locked factory samples) and CLIPS/TEMP
 (unsaved takes). A file the mapping already links to a library sample is skipped without reading it; every other
-file is read and its audio identity compared with Sources, so exact copies of anything in Sources — factory
+file is read and its audio identity compared with the library, so exact copies of anything in it — factory
 samples included — are never kept twice. What is left is offered with a tick each; the ticked ones are copied
-as they are into Sources/User/<date> Deluge read/<path below SAMPLES>.
+as they are into User/<date> Deluge read/<path below SAMPLES> in the library.
 """
 from __future__ import annotations
 
@@ -71,8 +71,8 @@ def folder_name(device: str = "Deluge") -> str:
 
 
 def keep(card, root: str, found: list[Found], device: str = "Deluge", progress=None) -> dict:
-    """Copy the ticked samples into Sources/User/<date> <device> read/…. Never overwrites."""
-    base = os.path.join(root, layout.find_child(root, layout.SOURCES) or layout.SOURCES, "User", folder_name(device))
+    """Copy the ticked samples into User/<date> <device> read/…. Never overwrites."""
+    base = os.path.join(root, layout.find_child(root, "User") or "User", folder_name(device))
     out = {"kept": 0, "problems": []}
     todo = [f for f in found if f.keep]
     for k, f in enumerate(todo):

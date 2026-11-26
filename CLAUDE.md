@@ -13,17 +13,19 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - `dsm/index` — XML reference extraction with byte offsets, card index, health check
 - `dsm/importer` — naming rules, conversion profiles, library↔card mapping, plan / apply / undo with journal
 - `dsm/edit` — M4: rename / move / relink / trash of card files, with byte-exact path rewrites in every kit, synth and song; factory move
-- `dsm/edit/factory.py` — the factory record (original path, new path, size, date, SHA-1 once copied) made at the factory move; saved in the library (_Sample Manager/factory-record.json) and on the card (DSM/FACTORY_RECORD.JSON); untouched copies go to Sources/Factory/Deluge/…, which must stay complete (missing_from_library)
+- `dsm/edit/factory.py` — the factory record (original path, new path, size, date, SHA-1 once copied) made at the factory move; saved in the library (_Sample Manager/factory-record.json) and on the card (DSM/FACTORY_RECORD.JSON); untouched copies go to Factory/Deluge/… in the library, which must stay complete (missing_from_library)
 - `dsm/usb` — the Deluge's card over USB (Community Firmware 1.3 SysEx file commands): `link.py` protocol, `usbcard.py` a Card backend with a PC cache of presets and sample headers, `winmm_in.py` big-buffer MIDI input (from the bench test)
-- `dsm/library` — the library (spec v2.1 section 2). `layout.py` folders (Sources / Samples / Backups / _Sample Manager);
-  `sources.py` zips read in place ("zip::member" paths), audio identity (hash of the audio data), audition cache;
-  `scanner.py` fingerprints (size + SHA-1, states ok/changed/missing) and Samples; `db.py` SQLite at
-  %LOCALAPPDATA%\SampleManager\library.db (user types by audio identity); `rebuild.py` Samples from Sources (plan/apply);
-  `reorganize.py` the one-time move from 0.8; `getdevice.py` Get from the Deluge
+- `dsm/library` — the library (spec v2.2 section 2): Studio\Samples holds Factory (Deluge, Syntakt), Paid, Free, User,
+  Backups, _Sample Manager — no copies. `layout.py` folders; `sources.py` zips read in place ("zip::member" paths),
+  audio identity (hash of the audio data), PC cache for audition/send; `scanner.py` fingerprints (size + SHA-1,
+  states ok/changed/missing); `db.py` SQLite at %LOCALAPPDATA%\SampleManager\library.db — user types by audio
+  identity, `listed` = the by-type view (one row per sample, the copy that counts; refresh_view);
+  `reorganize.py` the one-time move from 0.8 or 0.9.0 (Sources\* up a level, Samples copies to the Cleanup list,
+  db.flatten_paths so nothing is re-read); `getdevice.py` Get from the Deluge
 - `dsm/updater.py` — self-update from GitHub releases (same file as the Patch Manager's; repo nigeltx/sample-manager must be public;
   renamed from deluge-sample-manager on 26 Nov 2026 — GitHub redirects the old name, which 0.8.1 still uses).
   The workflow also publishes the installer as DelugeSampleManager-Setup-x.exe so 0.8.1 can update across the rename
-- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (All / Factory / Free / Paid → vendor → pack, with counts), SMART LISTS, then ON THE DELUGE (card folders); middle = sample list (green bold = on the card); right = details
+- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = SAMPLES by type, FOLDERS (Factory / Paid / Free / User → pack), ON THE DELUGE (card folders), SMART LISTS; middle = sample list (green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
 - `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer and
   publishes a GitHub release on every push to main
@@ -33,8 +35,8 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - Every card read or write goes through the Card methods (read_bytes, write_bytes, put_file, move, stat, inspect …), never open()/os calls on card.abs(), so the reader and USB backends both work.
 - Factory samples are LOCKED: nothing may rename, move, trash or write into SAMPLES/FACTORY except Initialize Factory Samples (EditBatch.factory=True); library FACTORY copies are read-only. Import offers Free and Paid only.
 - Never delete a card file: removals go to DSM_TRASH. Undo restores preset files from the per-apply backup, but never over a preset the Deluge has saved again since.
-- Sources are never written except new reads (factory copies from the card, Get from device, Added by hand);
-  Samples is written only by rebuild.py, after showing its plan; Backups is never scanned.
+- The library (Factory/Paid/Free/User) is never written except new reads (factory copies from the card, Get from
+  device) and Reorganize's one-time folder moves; Backups, Archive and _Sample Manager are never scanned.
 - The library keeps originals only; the card gets converted copies; `_Sample Manager/mapping.json` in the library root links them.
 - When writes arrive (M3+), every write goes through the pending tray, backup, atomic write, verify, journal.
 - XML is never re-serialised; only the recorded byte ranges of path values change.

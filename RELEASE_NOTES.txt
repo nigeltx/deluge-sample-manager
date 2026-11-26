@@ -1,3 +1,21 @@
+Sample Manager. Version 0.9.1 — one library folder, no copies.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+- The library is one folder again: Studio › Samples holds Factory, Paid, Free and User as they came, plus Backups.
+  The app still never changes them, and still fingerprints every file.
+- The Samples folder of copies and Rebuild are gone. SAMPLES in the left pane lists every sample once, by type,
+  straight from the library — nothing is copied. Set type… moves a sample to another list; nothing on disk changes.
+- Send works from anywhere in the library, inside zips too: the sample is unpacked to the PC cache on the way.
+- Library ▾ › Reorganize library… (offered at start) moves Sources › Factory, Paid, Free and User up one level and
+  puts the old Sources and Samples folders on the Studio Cleanup list; run Clean up Studio.cmd to move them to
+  Archive. A file you dropped into Samples yourself goes to User › Added by hand first. Nothing is read again:
+  the index follows the move. With the Deluge's card open it also copies the factory samples missing from
+  Factory › Deluge.
+- "Sources changed or missing" is now Library ▾ › Library changed or missing….
+- Updates come from github.com/nigeltx/sample-manager (the repository's new name).
+
 Sample Manager. Version 0.9.0 — the new name, and the library in three folders.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have (Deluge Sample Manager

@@ -100,8 +100,8 @@ def test_plan_apply_undo(env):
     # from Downloads: original copied into the library
     b2 = build_plan(expand([str(dl)]), "FREE", "FreeVendor", "Pads Pack", Profile(), card, lib, m,
                     taken_extra=[i1.card_rel])
-    assert {i.library_rel for i in b2.items} == {"Sources/Free/FreeVendor/Pads Pack/Dark Pad.wav",
-                                                "Sources/Free/FreeVendor/Pads Pack/sub/Closed Hat 1.wav"}
+    assert {i.library_rel for i in b2.items} == {"Free/FreeVendor/Pads Pack/Dark Pad.wav",
+                                                "Free/FreeVendor/Pads Pack/sub/Closed Hat 1.wav"}
     assert all(i.copy_original for i in b2.items)
     before = set(card.files)
     dry = ap.apply([b1, b2], card, lib, m, str(tmp / "bk"), True, dry_run=True)
@@ -111,7 +111,7 @@ def test_plan_apply_undo(env):
     for rel in j.created_card:
         info = inspect(card.abs(rel))
         assert info.deluge_plays and info.rate == 44100 and info.header == "PCM"
-    assert os.path.exists(os.path.join(lib, "Sources", "Free", "FreeVendor", "Pads Pack", "Dark Pad.wav"))
+    assert os.path.exists(os.path.join(lib, "Free", "FreeVendor", "Pads Pack", "Dark Pad.wav"))
     assert os.path.exists(os.path.join(j.backup, "presets-and-songs.zip"))
     m2 = Mapping(lib)  # reloaded from disk
     assert m2.for_card(i1.card_rel).library == i1.library_rel

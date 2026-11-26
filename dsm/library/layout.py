@@ -1,13 +1,13 @@
-"""The library's folders (spec v2.1 section 2).
+"""The library's folders (spec v2.2 section 2).
 
     Studio\\Samples                      the library root (Settings)
-        Sources\\Factory\\Deluge, Syntakt   each device's factory samples — complete (2.2)
-        Sources\\Paid, Free, User         packs as they came, folders or zips; never changed by the app
-        Samples\\Kick … Unknown           one copy of each sample, by type; loops in <Type>\\Loops; written only by rebuild.py
-        Backups\\Deluge, Syntakt          dated dumps of a device — never a source, never scanned
+        Factory\\Deluge, Syntakt          each device's factory samples — complete (2.1)
+        Paid, Free, User                 packs as they came, folders or zips; never changed by the app
+        Backups\\Deluge, Syntakt          dated dumps of a device — never read as samples
         _Sample Manager                  the app's own files: mapping, factory record, fingerprints, choices
 
-Before 0.9 the app folder was _DSM (reorganize.py renames it).
+The sorting by type is a view in the app (db.py), not a folder. Version 0.9.0 had Sources\\… and a Samples folder
+of copies, and 0.8 had _DSM; reorganize.py moves either layout to this one.
 """
 from __future__ import annotations
 
@@ -17,15 +17,16 @@ from dsm.library import types as stypes
 
 APP_FOLDER = "_Sample Manager"
 OLD_APP_FOLDER = "_DSM"
-SOURCES, SAMPLES, BACKUPS = "Sources", "Samples", "Backups"
+OLD_SOURCES, OLD_SAMPLES = "Sources", "Samples"     # 0.9.0's folders, taken away by Reorganize
+BACKUPS = "Backups"
 SOURCE_TYPES = ["Factory", "Paid", "Free", "User"]
 DEVICES = ["Deluge", "Syntakt"]
 LOOPS = "Loops"
 ARCHIVE = "Archive"                   # Clean up Studio.cmd moves things here; never read
 SKIP_DIRS = {APP_FOLDER.lower(), OLD_APP_FOLDER.lower(), ARCHIVE.lower(), BACKUPS.lower()}
 
-# Folder names in Samples, in the order the left pane shows them. A guessed "Hat" (open or closed unknown)
-# goes to Other drums until it is set by hand.
+# The type lists in the left pane, in order. A guessed "Hat" (open or closed unknown) is listed under Other drums
+# until it is set by hand.
 TYPE_FOLDERS = ["Kick", "Snare", "Clap", "Closed hat", "Open hat", "Cymbal", "Tom", "Percussion", "Other drums",
                 "Bass", "Synth", "Keys", "Pad", "Vocal", "FX", "Instrument", stypes.UNKNOWN]
 
@@ -44,12 +45,14 @@ def app_dir(root: str) -> str:
     return os.path.join(root, APP_FOLDER)
 
 
-def sources_dir(root: str, *more: str) -> str:
-    return os.path.join(root, SOURCES, *more)
-
-
-def samples_dir(root: str, *more: str) -> str:
-    return os.path.join(root, SAMPLES, *more)
+def source_dirs(root: str) -> list[tuple[str, str]]:
+    """[(type, real path)] for Factory, Paid, Free and User as they are on disk (matched without regard to case)."""
+    out = []
+    for t in SOURCE_TYPES:
+        n = find_child(root, t)
+        if n:
+            out.append((t, os.path.join(root, n)))
+    return out
 
 
 def backups_dir(root: str, device: str) -> str:
@@ -57,7 +60,7 @@ def backups_dir(root: str, device: str) -> str:
 
 
 def factory_dir(root: str, device: str) -> str:
-    return sources_dir(root, "Factory", device)
+    return os.path.join(root, "Factory", device)
 
 
 def find_child(parent: str, name: str) -> str | None:
@@ -69,10 +72,6 @@ def find_child(parent: str, name: str) -> str | None:
     except OSError:
         pass
     return None
-
-
-def is_new_layout(root: str) -> bool:
-    return bool(root and find_child(root, SOURCES) and os.path.isdir(app_dir(root)))
 
 
 def cleanup_list_path(root: str) -> str:

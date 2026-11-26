@@ -1,11 +1,11 @@
-"""The v2 library: Sources with fingerprints and zips, Samples by type, Rebuild, Reorganize, Get from device."""
+"""The v2.2 library: one folder, fingerprints, zips read in place, every sample once by type, Reorganize, Get."""
 import io
 import os
 import shutil
 import time
 import zipfile
 
-from dsm.library import layout, rebuild, sources as src
+from dsm.library import layout, sources as src
 from dsm.library.db import LibraryDB
 from dsm.library.scanner import scan
 from tests.fixture import write_extensible, write_wav
@@ -17,9 +17,10 @@ def wav_bytes(tmp_path, name, **kw):
     return p.read_bytes()
 
 
-def make_lib(tmp_path):
+def make_lib(tmp_path, top=""):
+    """A library in the v2.2 layout (top="Sources" makes 0.9.0's)."""
     lib = tmp_path / "Samples"
-    S = lib / "Sources"
+    S = lib / top if top else lib
     write_wav(str(S / "Factory" / "Deluge" / "DRUMS" / "KICK" / "808 KICK.WAV"))
     write_wav(str(S / "Paid" / "Mars" / "808" / "Kicks" / "BD 01.wav"), n=3000)
     write_wav(str(S / "Paid" / "Mars" / "808" / "Loops" / "Groove 120 BPM.wav"), n=5000)
@@ -37,6 +38,7 @@ def make_lib(tmp_path):
     write_wav(str(lib / "Backups" / "Deluge" / "old.wav"))          # never read
     write_wav(str(lib / "_Sample Manager" / "Removed" / "x.wav"))   # never read
     write_wav(str(S / "Paid" / "Archive" / "gone.wav"))              # never read
+    write_wav(str(lib / "loose at the top.wav"))                     # outside the four folders: never read
     return lib
 
 
@@ -50,93 +52,72 @@ def test_identity_ignores_header_differences(tmp_path):
 
 
 def test_split_rel():
-    assert src.split_rel("Sources/Paid/Dark Mass.zip::Snares/Snare 1.wav") == ("Sources", "Paid", "Dark Mass", "Snares")
-    assert src.split_rel("Sources/Factory/Deluge/DRUMS/KICK/X.WAV") == ("Sources", "Factory", "Deluge", "DRUMS")
-    assert src.split_rel("Samples/Kick/Loops/x.wav") == ("Samples", "Kick", "Loops", "")
-    assert src.split_rel("Samples/Kick/x.wav") == ("Samples", "Kick", "", "")
+    assert src.split_rel("Paid/Dark Mass.zip::Snares/Snare 1.wav") == ("Library", "Paid", "Dark Mass", "Snares")
+    assert src.split_rel("Factory/Deluge/DRUMS/KICK/X.WAV") == ("Library", "Factory", "Deluge", "DRUMS")
+    assert src.split_rel("PAID/x.wav") == ("Library", "Paid", "", "")
 
 
 def test_scan_reads_zips_and_skips_backups(tmp_path):
     lib = make_lib(tmp_path)
     db = LibraryDB(str(tmp_path / "l.db"))
     r = scan(db, str(lib))
-    rels = {x["rel"] for x in db.query(area="Sources")}
-    assert "Sources/Paid/Dark Mass.zip::Bonus.zip::Claps/Clap.wav" in rels
-    assert "Sources/Paid/Dark Mass.zip::Snares/Snare 1.wav" in rels
+    rels = {x["rel"] for x in db.query()}
+    assert "Paid/Dark Mass.zip::Bonus.zip::Claps/Clap.wav" in rels
+    assert "Paid/Dark Mass.zip::Snares/Snare 1.wav" in rels
     assert len(rels) == 7 and r["read"] == 7
-    assert not any("Backups" in x or "Removed" in x or "Archive" in x for x in rels)
+    assert not any("Backups" in x or "Removed" in x or "Archive" in x or "loose" in x for x in rels)
     assert len(db.source_files()) == 5                      # four files and one zip
     assert scan(db, str(lib))["read"] == 0                   # nothing changed: nothing read
     assert os.path.exists(lib / "_Sample Manager" / "sources.json")
-    data = src.read_bytes(str(lib), "Sources/Paid/Dark Mass.zip::Bonus.zip::Claps/Clap.wav")
+    data = src.read_bytes(str(lib), "Paid/Dark Mass.zip::Bonus.zip::Claps/Clap.wav")
     assert data[:4] == b"RIFF"
-    p = src.materialize(str(lib), "Sources/Paid/Dark Mass.zip::Snares/Snare 1.wav", str(tmp_path / "cache"))
+    p = src.materialize(str(lib), "Paid/Dark Mass.zip::Snares/Snare 1.wav", str(tmp_path / "cache"))
     assert os.path.getsize(p) > 44 and p.startswith(str(tmp_path / "cache"))
 
 
 def test_changed_missing_moved_and_user_deletions(tmp_path):
     lib = make_lib(tmp_path)
-    write_wav(str(lib / "Sources" / "User" / "mine.wav"), n=777)
+    write_wav(str(lib / "User" / "mine.wav"), n=777)
     db = LibraryDB(str(tmp_path / "l.db"))
     scan(db, str(lib))
-    n0 = len(db.query(area="Sources"))
-    bd = lib / "Sources" / "Paid" / "Mars" / "808" / "Kicks" / "BD 01.wav"
+    n0 = len(db.query())
+    bd = lib / "Paid" / "Mars" / "808" / "Kicks" / "BD 01.wav"
     write_wav(str(bd), n=3333)                               # changed outside the app
     os.utime(bd, (time.time() + 5, time.time() + 5))
-    os.remove(lib / "Sources" / "Free" / "Co" / "Pads" / "Pad.wav")       # gone
-    os.remove(lib / "Sources" / "User" / "mine.wav")                        # gone from User: meant
-    os.rename(lib / "Sources" / "Paid" / "Dark Mass.zip", lib / "Sources" / "Paid" / "Dark Mass Vol 1.zip")  # moved
+    os.remove(lib / "Free" / "Co" / "Pads" / "Pad.wav")      # gone
+    os.remove(lib / "User" / "mine.wav")                     # gone from User: meant
+    os.rename(lib / "Paid" / "Dark Mass.zip", lib / "Paid" / "Dark Mass Vol 1.zip")   # moved
     r = scan(db, str(lib))
     assert r["changed"] == 1 and r["missing"] == 1 and r["moved"] == 1 and r["removed"] == 1
     alerts = {a["path"]: a["state"] for a in db.source_alerts()}
-    assert alerts == {"Sources/Paid/Mars/808/Kicks/BD 01.wav": "changed", "Sources/Free/Co/Pads/Pad.wav": "missing"}
-    assert len(db.query(area="Sources")) == n0 - 1           # still using what was read; only User's file forgotten
-    db.accept_change("Sources/Paid/Mars/808/Kicks/BD 01.wav")
-    db.accept_missing("Sources/Free/Co/Pads/Pad.wav")
+    assert alerts == {"Paid/Mars/808/Kicks/BD 01.wav": "changed", "Free/Co/Pads/Pad.wav": "missing"}
+    assert len(db.query()) == n0 - 1                         # still using what was read; only User's file forgotten
+    db.accept_change("Paid/Mars/808/Kicks/BD 01.wav")
+    db.accept_missing("Free/Co/Pads/Pad.wav")
     scan(db, str(lib))
     assert db.source_alerts() == []
-    assert len(db.query(area="Sources")) == n0 - 2
+    assert len(db.query()) == n0 - 2
 
 
-def test_rebuild_by_type_is_repeatable(tmp_path):
+def test_every_sample_once_by_type(tmp_path):
     lib = make_lib(tmp_path)
     db = LibraryDB(str(tmp_path / "l.db"))
-    scan(db, str(lib))
-    pl = rebuild.plan(db, str(lib))
-    assert len(pl.adds) == 6 and not (pl.moves or pl.removes or pl.hand)     # 7 samples, the 808 twice
-    names = {k for k, _ in pl.adds}
-    assert "Samples/Kick/808 KICK.WAV" in names              # the factory copy names it
-    assert "Samples/Other drums/Loops/Groove 120 BPM.wav" in names
-    assert "Samples/Clap/Clap.wav" in names
-    done = rebuild.apply(db, pl)
-    assert done["added"] == 6 and not done["errors"]
-    assert (lib / "Samples" / "Snare" / "Snare 1.wav").exists()
-    assert rebuild.plan(db, str(lib)).empty                 # a second rebuild changes nothing
-    # Set type… moves the file
-    kick = db.row("Samples/Kick/808 KICK.WAV")
-    db.set_user_type([kick["audio"]], ["Tom"], False)
-    pl = rebuild.plan(db, str(lib))
-    assert [(a, b) for a, b, _ in pl.moves] == [("Samples/Kick/808 KICK.WAV", "Samples/Tom/808 KICK.WAV")]
-    rebuild.apply(db, pl)
-    assert not (lib / "Samples" / "Kick" / "808 KICK.WAV").exists() and (lib / "Samples" / "Tom" / "808 KICK.WAV").exists()
-    # a file dropped in by hand goes to Sources › User; a second copy is taken out; a source that goes away too
-    write_wav(str(lib / "Samples" / "Pad" / "my own.wav"), n=999)
-    shutil.copy(lib / "Samples" / "Tom" / "808 KICK.WAV", lib / "Samples" / "Tom" / "copy.wav")
-    os.remove(lib / "Sources" / "Paid" / "Mars" / "808" / "Kicks" / "BD 01.wav")
-    scan(db, str(lib))
-    db.accept_missing("Sources/Paid/Mars/808/Kicks/BD 01.wav")
-    pl = rebuild.plan(db, str(lib))
-    assert [d for _, d in pl.hand] == ["Sources/User/Added by hand/my own.wav"]
-    why = dict(pl.removes)
-    assert why["Samples/Tom/copy.wav"].startswith("a second copy")
-    assert why["Samples/Kick/BD 01.wav"].startswith("its sample is no longer")
-    rebuild.apply(db, pl)
-    assert (lib / "Sources" / "User" / "Added by hand" / "my own.wav").exists()
-    assert list((lib / "_Sample Manager" / "Removed").rglob("BD 01.wav"))
-    scan(db, str(lib))
-    assert rebuild.plan(db, str(lib)).adds and True          # the hand file comes back from Sources › User
-    rebuild.apply(db, rebuild.plan(db, str(lib)))
-    assert rebuild.plan(db, str(lib)).empty
+    r = scan(db, str(lib))
+    assert r["listed"] == 6                                  # 7 copies, the 808 twice
+    listed = db.query(listed=True)
+    assert len(listed) == 6
+    kick = db.query(folder="Kick")
+    assert [x["rel"] for x in kick if "808 KICK" in x["rel"]] == ["Factory/Deluge/DRUMS/KICK/808 KICK.WAV"]   # factory counts
+    assert db.type_counts()["Kick"] == 2 and db.type_counts(loop=True) == {"Other drums": 1}
+    assert [x["name"] for x in db.query(folder="Clap")] == ["Clap.wav"]
+    # Set type… changes the list and nothing on disk
+    before = sorted(p.name for p in lib.rglob("*"))
+    a = kick[0]["audio"]
+    db.set_user_type([a], ["Tom"], False)
+    assert a in {x["audio"] for x in db.query(folder="Tom")}
+    assert a not in {x["audio"] for x in db.query(folder="Kick")}
+    assert sorted(p.name for p in lib.rglob("*")) == before
+    assert len(db.copies(a)) == (2 if "808 KICK" in kick[0]["rel"] else 1)
 
 
 def test_type_folder():
@@ -165,17 +146,32 @@ def card(tmp_path, monkeypatch):
     return c
 
 
-def test_reorganize_once(card, tmp_path):
-    lib = tmp_path / "Studio" / "Samples"
-    # the 0.8 state: _DSM with the record and mapping, Factory › Digitakt II with one of the two factory samples
-    m = Mapping(str(lib))
-    os.makedirs(lib, exist_ok=True)
+def _record_08(card, tmp_path, lib):
+    m = Mapping(str(tmp_path / "elsewhere"))
     folders, loose = ed.factory_candidates(card)
     b = ed.factory_move(card, folders, loose)
     j = ed.apply(ed.plan([b], build_index(card)), [b], card, m, str(tmp_path / "bk"), True)
     rec = factory.make(card, [tuple(x) for x in j.moved], j.id)
     rec.entries[0].library = "FACTORY/" + rec.entries[0].card[len("SAMPLES/FACTORY/"):]     # 0.8's place
+    return rec
+
+
+def _cleanup_list(tmp_path):
+    cl = tmp_path / "Studio" / "Software" / "Studio Cleanup" / "Cleanup list.txt"
+    os.makedirs(cl.parent, exist_ok=True)
+    cl.write_text("Samples\\Old\r\n")
+    return cl
+
+
+class _S(dict):
+    def save(self):
+        self["saved"] = True
+
+
+def test_reorganize_from_08(card, tmp_path):
+    lib = tmp_path / "Studio" / "Samples"
     os.makedirs(lib / "_DSM", exist_ok=True)
+    rec = _record_08(card, tmp_path, lib)
     with open(lib / "_DSM" / "factory-record.json", "w") as f:
         f.write(rec.to_json())
     dig = lib / "Sources" / "Factory" / "Digitakt II"
@@ -187,60 +183,91 @@ def test_reorganize_once(card, tmp_path):
     m.add(Link(card="SAMPLES/FREE/CO/KICK A.WAV", library="FREE/Co/Kick A.wav"))
     m.save()
     os.makedirs(tmp_path / "appdata" / "SampleManager" / "Backups" / "CARD 2026-11-01 120000", exist_ok=True)
-    cl = tmp_path / "Studio" / "Software" / "Studio Cleanup" / "Cleanup list.txt"
-    os.makedirs(cl.parent)
-    cl.write_text("Samples\\Old\r\n")
+    cl = _cleanup_list(tmp_path)
     m = Mapping(str(lib))
     assert m.path.endswith(os.path.join("_DSM", "mapping.json"))
     rec = factory.load(str(lib))
     assert reorganize.needed(str(lib))
     steps = reorganize.plan(str(lib), m, rec, card)
     kinds = [s.kind for s in steps]
-    assert kinds == ["rename", "folders", "appfolder", "mapping", "record", "factory", "backups"], kinds
-    assert not (lib / "Samples").exists()                   # planning changes nothing
-
-    class S(dict):
-        def save(self):
-            self["saved"] = True
-    st = S()
+    assert kinds == ["rename", "flatten", "folders", "appfolder", "mapping", "record", "factory", "backups"], kinds
+    assert (lib / "Sources").exists() and not (lib / "Free").exists()          # planning changes nothing
+    st = _S()
     out = reorganize.apply(str(lib), steps, m, rec, card, settings=st)
     assert not out["problems"], out["problems"]
-    assert (lib / "Sources" / "Factory" / "Deluge" / "LOOSE.WAV").exists()
-    assert (lib / "Sources" / "Factory" / "Deluge" / "OLDSTUFF" / "KICKS" / "kick_unused.wav").exists()
+    assert (lib / "Factory" / "Deluge" / "LOOSE.WAV").exists()
+    assert (lib / "Factory" / "Deluge" / "OLDSTUFF" / "KICKS" / "kick_unused.wav").exists()
+    assert (lib / "Free" / "Co" / "Kick A.wav").exists() and not os.listdir(lib / "Sources")
     assert (lib / "_Sample Manager" / "mapping.json").exists() and not os.listdir(lib / "_DSM")
-    assert Mapping(str(lib)).for_card("SAMPLES/FREE/CO/KICK A.WAV").library == "Sources/Free/Co/Kick A.wav"
+    assert Mapping(str(lib)).for_card("SAMPLES/FREE/CO/KICK A.WAV").library == "Free/Co/Kick A.wav"
     rec2 = factory.load(str(lib))
-    assert all(e.library.startswith("Sources/Factory/Deluge/") and e.sha1 for e in rec2.entries)
+    assert all(e.library.startswith("Factory/Deluge/") and e.sha1 for e in rec2.entries)
     assert (lib / "Backups" / "Deluge" / "CARD 2026-11-01 120000").is_dir()
     assert st["backup_root"].endswith(os.path.join("Backups", "Deluge"))
-    assert cl.read_text().splitlines()[-1] == "Samples\\_DSM"
-    assert not reorganize.needed(str(lib)) or (lib / "_DSM").exists()
+    assert cl.read_text().splitlines()[-2:] == ["Samples\\Sources", "Samples\\_DSM"]
+    assert not reorganize.needed(str(lib))                   # old folders on the Cleanup list don't count
     os.rmdir(lib / "_DSM")                                  # what Clean up Studio.cmd does
-    assert not reorganize.needed(str(lib))
+    os.rmdir(lib / "Sources")
     assert reorganize.plan(str(lib), Mapping(str(lib)), rec2, card) == []       # nothing left to do
+
+
+def test_reorganize_from_090(card, tmp_path):
+    """0.9.0's layout: Sources\\…, a Samples folder of copies (and one file dropped there by hand), its database."""
+    lib = tmp_path / "Studio" / "Samples"
+    make_lib(tmp_path / "Studio", top="Sources")
+    os.makedirs(lib / "_Sample Manager", exist_ok=True)
+    shutil.copy(lib / "Sources" / "Paid" / "Mars" / "808" / "Kicks" / "BD 01.wav", tmp_path / "bd.wav")
+    os.makedirs(lib / "Samples" / "Kick")
+    shutil.copy(tmp_path / "bd.wav", lib / "Samples" / "Kick" / "BD 01.wav")
+    write_wav(str(lib / "Samples" / "Pad" / "my own.wav"), n=999)
+    # 0.9.0's index: paths with Sources/
+    db = LibraryDB(str(tmp_path / "l.db"))
+    os.makedirs(lib / "Paid", exist_ok=True)
+    tmpview = lib / "Paid"
+    os.rmdir(tmpview)
+    from dsm.library import scanner
+    for rel, full in src.walk_files(str(lib / "Sources"), str(lib)):
+        sha, rows = scanner.read_source_file(rel, full)
+        for r in rows:
+            r["area"] = "Sources"
+        db.upsert(rows)
+        st_ = os.stat(full)
+        db.set_source_file(rel, st_.st_size, st_.st_mtime, sha)
+    cl = _cleanup_list(tmp_path)
+    rec = factory.record_from_existing(card)
+    steps = reorganize.plan(str(lib), Mapping(str(lib)), None, None, db.source_audios())
+    kinds = [s.kind for s in steps]
+    assert kinds == ["flatten", "folders", "samples"], kinds
+    assert len(steps[2].data["hand"]) == 1
+    out = reorganize.apply(str(lib), steps, Mapping(str(lib)), None, None, db=db)
+    assert not out["problems"], out["problems"]
+    assert (lib / "User" / "Added by hand" / "my own.wav").exists()
+    assert (lib / "Paid" / "Dark Mass.zip").exists()
+    assert cl.read_text().splitlines()[-2:] == ["Samples\\Sources", "Samples\\Samples"]
+    r = scan(db, str(lib))
+    assert r["read"] == 1                                    # only the hand file; the rest followed by path
+    assert r["missing"] == 0 and db.source_alerts() == []
+    assert {x["rel"] for x in db.query()} >= {"Paid/Dark Mass.zip::Snares/Snare 1.wav", "User/Added by hand/my own.wav"}
+    assert not any(x["rel"].startswith(("Sources/", "Samples/")) for x in db.query())
+    del rec
 
 
 def test_reorganize_waits_for_the_card(card, tmp_path):
     lib = tmp_path / "Samples"
-    rec = factory.record_from_existing(card)
     os.makedirs(lib, exist_ok=True)
-    if not rec.entries:
-        folders, loose = ed.factory_candidates(card)
-        b = ed.factory_move(card, folders, loose)
-        j = ed.apply(ed.plan([b], build_index(card)), [b], card, Mapping(str(lib)), str(tmp_path / "bk"), True)
-        rec = factory.make(card, [tuple(x) for x in j.moved], j.id)
+    rec = _record_08(card, tmp_path, lib)
     steps = reorganize.plan(str(lib), None, rec, None)
     assert steps[-1].kind == "factory-wait" and steps[-1].data["n"] == len(rec.entries)
 
 
 def test_get_from_the_deluge(card, tmp_path):
     lib = tmp_path / "Samples"
-    write_wav(str(lib / "Sources" / "Free" / "x.wav"), n=123)
+    write_wav(str(lib / "Free" / "x.wav"), n=123)
     db = LibraryDB(str(tmp_path / "l.db"))
     scan(db, str(lib))
     # a recording made on the Deluge, a copy of something already in Sources, a TEMP take, a mapped file
     write_wav(card.abs("SAMPLES/RECORD/REC001.WAV"), n=4321)
-    shutil.copy(lib / "Sources" / "Free" / "x.wav", card.abs("SAMPLES/RECORD/REC002.WAV"))
+    shutil.copy(lib / "Free" / "x.wav", card.abs("SAMPLES/RECORD/REC002.WAV"))
     write_wav(card.abs("SAMPLES/CLIPS/TEMP/T1.WAV"), n=999)
     card.scan()
     m = Mapping(str(lib))
@@ -252,7 +279,7 @@ def test_get_from_the_deluge(card, tmp_path):
         f.keep = f.card_rel == "SAMPLES/RECORD/REC001.WAV"
     out = getdevice.keep(card, str(lib), found)
     assert out["kept"] == 1 and not out["problems"]
-    kept = lib / "Sources" / "User" / getdevice.folder_name() / "RECORD" / "REC001.WAV"
+    kept = lib / "User" / getdevice.folder_name() / "RECORD" / "REC001.WAV"
     assert kept.exists()
     scan(db, str(lib))
     assert "SAMPLES/RECORD/REC001.WAV" not in [f.card_rel for f in getdevice.find_new(card, db, m)]
