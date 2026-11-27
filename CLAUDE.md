@@ -2,7 +2,7 @@
 
 Windows GUI app (Python 3.12 + PySide6): one sample library (Studio\\Samples) for every device — for now the
 Synthstrom Deluge and the Elektron Syntakt. Called Deluge Sample Manager before 0.9 (the Python package is still `dsm`).
-The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_v2.x.pdf (latest, v2.4).
+The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_v2.x.pdf (latest, v2.5).
 
 The owner (Nigel) does not code or debug. Keep the code easy for Claude to change:
 plain modules, tests for every core behaviour, no clever metaprogramming.
@@ -41,7 +41,10 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   `ui/tags_ui.py` the window side (a mixin, like syntakt_ui); `ui/tag_widgets.py` TagBox, Tags… dialog, help.
   Library-wide search uses a cache of every listed sample's search context (_all_library), warmed after each scan.
 - Card layout (0.14, Nigel: "mirror TARGETS › DELUGE"): SAMPLES/DRUMS/<KICK|SNARE|…|OTHER>/ and SAMPLES/<BASS|SYNTH|…|UNKNOWN>/
-  (naming.TYPE_DIRS, card_path(type_folder=…)), file named after the ID; factory stays in SAMPLES/FACTORY. The old
+  (naming.TYPE_DIRS, card_path(type_folder=…)), file named after the ID. 0.15 (Nigel): factory samples are sorted too when the card has a factory record —
+  EditBatch.factory_sort lets them move, edits.apply makes the record follow (factory.follow_moves, journal
+  factory_moves, undo reverses), factory.remember(rec) makes is_factory_card() know them wherever they are, and
+  factory.home(e) (SAMPLES/FACTORY/+original) keeps finding their library copies. The old
   SAMPLES/PAID|FREE/<vendor>/<pack>/ layout is moved by `dsm/edit/sortcard.py` (Sort the card by type…, an EditBatch of moves).
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
 - `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE and › SYNTAKT (samples on each device by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
@@ -52,7 +55,7 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 ## Rules
 - M1–M2 were read-only; M3 adds files; M4 (current) moves, renames, relinks and trashes existing card files and rewrites preset paths.
 - Every card read or write goes through the Card methods (read_bytes, write_bytes, put_file, move, stat, inspect …), never open()/os calls on card.abs(), so the reader and USB backends both work.
-- Factory samples are LOCKED: nothing may rename, move, trash or write into SAMPLES/FACTORY except Initialize Factory Samples (EditBatch.factory=True); library FACTORY copies are read-only. Import offers Free and Paid only.
+- Factory samples are LOCKED: nothing may rename, move, trash or write to them except Initialize Factory Samples (EditBatch.factory=True) and Sort the card by type (EditBatch.factory_sort=True, moves only); they are known by SAMPLES/FACTORY or the factory record (factory.is_factory_card); library FACTORY copies are read-only. Import offers Free and Paid only.
 - Never delete a card file: removals go to DSM_TRASH. Undo restores preset files from the per-apply backup, but never over a preset the Deluge has saved again since.
 - The library (Factory/Paid/Free/User) is never written except new reads (factory copies from the card, Get from
   device) and Reorganize's one-time folder moves; Backups, Archive and _Sample Manager are never scanned.

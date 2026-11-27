@@ -118,3 +118,42 @@ def test_copy_keeps_what_is_already_in_sources(card, tmp_path):
     assert out == {"copied": 1, "skipped": 1, "problems": []}
     assert os.path.getmtime(there) == 1                     # untouched
     assert e.library == "Factory/Deluge/loose.WAV" and e.sha1
+
+
+def test_sort_moves_factory_and_record_follows(card, tmp_path):
+    """0.15: with a factory record, Sort the card by type moves factory samples too (named after their IDs); the record
+    follows them, they stay locked where they land, their library copies are still found, and Undo puts it all back."""
+    from dsm.edit.sortcard import sort_batch
+    rec, lib, m, j = _factory_move(card, tmp_path)
+    factory.copy_to_library(rec, card, lib, m)
+    factory.remember(rec)
+    kick = "SAMPLES/FACTORY/OLDSTUFF/KICKS/kick_unused.wav"
+    assert factory.is_factory_card(kick)
+    types = {kick: "Kick", "SAMPLES/FACTORY/LOOSE.WAV": "Unknown"}
+    b0, _ = sort_batch(card, types, {}, {})
+    assert b0 is None                                                    # without with_factory they stay put
+    batch, _note = sort_batch(card, types, {kick.lower(): "a1"}, {"a1": "KK0001 Kick Unused"}, with_factory=True)
+    assert batch.factory_sort and dict(batch.moves)[kick] == "SAMPLES/DRUMS/KICK/KK0001_KICK_UNUSED.WAV"
+    p = ed.plan([batch], build_index(card))
+    assert not p.problems
+    j2 = ed.apply(p, [batch], card, m, str(tmp_path / "bk2"), False, library_root=lib)
+    card.scan()
+    rec2 = factory.load(lib)
+    e = next(x for x in rec2.entries if x.original.endswith("kick_unused.wav"))
+    assert e.card == "SAMPLES/DRUMS/KICK/KK0001_KICK_UNUSED.WAV"
+    assert factory.load(None, card).by_card().get(e.card.lower())         # the card's copy of the record too
+    assert factory.is_factory_card(e.card) and factory.origin(e.card) == "Factory"
+    assert factory.missing_from_library(rec2, lib) == []                 # library copies found by their home path
+    assert factory.check(rec2, card) == []
+    assert m.for_card(e.card).library == "Factory/Deluge/OLDSTUFF/KICKS/kick_unused.wav"
+    # still locked: no rename, no trash
+    p3 = ed.plan([ed.EditBatch("x", moves=[(e.card, "SAMPLES/DRUMS/KICK/OTHER.WAV")])], build_index(card))
+    assert p3.problems and "locked" in p3.problems[0]
+    p4 = ed.plan([ed.EditBatch("t", trash=[e.card])], build_index(card))
+    assert p4.problems
+    # undo: files and record go back
+    ed.undo(j2, card, m, lib)
+    card.scan()
+    assert card.exists(kick) and factory.load(lib).by_card().get(kick.lower())
+    assert factory.is_factory_card(kick)
+    factory.remember(None)

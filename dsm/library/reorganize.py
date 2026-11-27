@@ -248,7 +248,7 @@ def apply(root: str, steps: list[Step], mapping=None, rec=None, card=None, setti
             elif st.kind == "record" and rec is not None:
                 for e in rec.entries:
                     if e.library and not e.library.lower().startswith(factory.LIB_PREFIX.lower()):
-                        e.library = factory.library_copy_path(e.card)
+                        e.library = factory.library_copy_path(factory.home(e))
                 factory.save(rec, root, None)
             elif st.kind == "factory" and rec is not None and card is not None:
                 r = factory.copy_to_library(rec, card, root, mapping, progress=progress)

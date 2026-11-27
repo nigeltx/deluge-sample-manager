@@ -42,6 +42,7 @@ class Journal:
     xml_after: dict = field(default_factory=dict)                 # edit: xml_rel -> sha1 written
     mapping_moves: list = field(default_factory=list)             # edit: [old_card_rel, new_card_rel]
     mapping_repoints: list = field(default_factory=list)          # edit: [extra_rel, kept_rel, library_rel]
+    factory_moves: list = field(default_factory=list)             # edit: [old, new] of factory samples (record follows)
 
     def save(self):
         d = journal_dir()

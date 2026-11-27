@@ -487,6 +487,7 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         self.factory_rec = factory.load(self.settings["library_root"], self.card)
         if self.factory_rec and self.factory_rec.undone:
             self.factory_rec = None
+        factory.remember(self.factory_rec)
         self._refresh_devices()
         QTimer.singleShot(0, self._build_library_root)
         self.record_act.setVisible(self.factory_rec is not None)
@@ -1673,7 +1674,8 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         """0.14: move card samples into the folders of their types (SAMPLES/DRUMS/KICK …) through the pending tray."""
         from dsm.edit.sortcard import sort_batch
         types = {r: f for r, f in self.card_types.items() if folders is None or f in folders}
-        batch, note = sort_batch(self.card, types, self.card_audio, self.id_labels)
+        has_rec = bool(self.factory_rec and not self.factory_rec.undone)
+        batch, note = sort_batch(self.card, types, self.card_audio, self.id_labels, with_factory=has_rec)
         if not batch:
             QMessageBox.information(self, APP_NAME, "Nothing to move: " + (note or "every sample is in place."))
             return
@@ -1685,7 +1687,9 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         msg = (f"Move {len(batch.moves):,} sample{'s' if len(batch.moves) != 1 else ''} into the folders of their "
                f"types, as TARGETS › DELUGE shows them:\n\n{lines}\n\nSamples with an ID are named after it "
                "(HO0046_FUN_HAT.WAV). Every kit, synth and song that uses them is updated, and folders left empty are "
-               "removed. Factory samples stay in SAMPLES/FACTORY. The change goes to the pending tray; nothing "
+               "removed. " + ("Factory samples move too and stay locked; the factory record follows them, and their untouched "
+               "copies stay in the library's Factory › Deluge. " if batch.factory_sort else
+               "Factory samples stay in SAMPLES/FACTORY. ") + "The change goes to the pending tray; nothing "
                "happens until you press Apply, and History can undo it." + (f"\n\n{note}" if note else ""))
         if QMessageBox.question(self, APP_NAME, msg) == QMessageBox.Yes:
             self._add_edit(batch)
@@ -2116,7 +2120,8 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
                 card.scan()
                 idx = build_index(card)
                 p = ed.plan(edits, idx)
-                j = ed.apply(p, edits, card, mapping, backup_root, full and not imports, dry_run=dry, progress=progress)
+                j = ed.apply(p, edits, card, mapping, backup_root, full and not imports, dry_run=dry, progress=progress,
+                             library_root=lib if lib and os.path.isdir(lib) else None)
                 out.append(j)
                 if not dry and any(getattr(b, "factory", False) for b in edits):
                     rec = factory.make(card, [tuple(x) for x in j.moved], j.id)
@@ -2144,6 +2149,8 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
                     msg.append(f"{len(j.created_card)} files written to the card and checked; "
                                f"{len(j.created_library)} originals copied into the library.")
             QMessageBox.information(self, "Done", "\n".join(msg) + "\n\nUndo is in History.")
+            self.factory_rec = factory.load(lib if lib and os.path.isdir(lib) else None, card) or self.factory_rec
+            factory.remember(self.factory_rec)
             self._scan_library(quiet=True)
             self._refresh()
             if made_record:

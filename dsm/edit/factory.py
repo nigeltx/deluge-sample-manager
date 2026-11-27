@@ -61,9 +61,42 @@ class FactoryRecord:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
+# Factory samples the record knows by their place on the open card. Since 0.15 Sort the card by type can move them
+# out of SAMPLES/FACTORY (into SAMPLES/DRUMS/KICK …), so a path alone no longer says a sample is factory; the
+# window calls remember() whenever it loads the record.
+_KNOWN: set[str] = set()
+
+
+def remember(rec: "FactoryRecord | None") -> None:
+    """Make is_factory_card() know the record's samples wherever they are on the card."""
+    _KNOWN.clear()
+    if rec and not rec.undone:
+        _KNOWN.update(e.card.lower() for e in rec.entries)
+
+
 def is_factory_card(rel: str) -> bool:
-    """Factory samples live under SAMPLES/FACTORY once the card is initialized; they are locked."""
-    return rel.upper().startswith(PREFIX)
+    """A factory sample: under SAMPLES/FACTORY, or in the factory record wherever it now sits. They are locked:
+    only Initialize Factory Samples and Sort the card by type may move them."""
+    return rel.upper().startswith(PREFIX) or rel.lower() in _KNOWN
+
+
+def home(e: "Entry") -> str:
+    """Where Initialize put a factory sample: SAMPLES/FACTORY/ + its original place. Its copy in the library follows
+    this path, wherever the sample is on the card now."""
+    o = e.original.replace("\\", "/")
+    return PREFIX + o[len("SAMPLES/"):] if o.upper().startswith("SAMPLES/") else e.card
+
+
+def follow_moves(rec: "FactoryRecord", moves) -> list[list[str]]:
+    """Point the record's entries at their new places after moves [(old, new)]. Returns the moves that touched it."""
+    by = {e.card.lower(): e for e in rec.entries}
+    done = []
+    for old, new in moves:
+        e = by.get(old.lower())
+        if e is not None:
+            e.card = new
+            done.append([old, new])
+    return done
 
 
 def is_factory_library(rel: str) -> bool:
@@ -74,6 +107,8 @@ def origin(rel: str, on_card: bool = True) -> str:
     """Factory, Free, Paid, Deluge (the Deluge's own folders) or Other, from a card or library path."""
     parts = rel.replace("\\", "/").split("/")
     top = (parts[1] if on_card and len(parts) > 2 else parts[0] if not on_card else "").upper()
+    if on_card and is_factory_card(rel):
+        return "Factory"
     if top in ("FACTORY", "FREE", "PAID"):
         return top.title()
     if on_card and top in ("CLIPS", "RECORD", "RESAMPLE", "EXPORTS"):
@@ -110,7 +145,7 @@ def missing_from_library(rec: FactoryRecord, library_root: str) -> list[Entry]:
     for dp, _dns, fns in os.walk(base):
         for fn in fns:
             have.add(os.path.relpath(os.path.join(dp, fn), library_root).replace(os.sep, "/").lower())
-    return [e for e in rec.entries if library_copy_path(e.card).lower() not in have]
+    return [e for e in rec.entries if library_copy_path(home(e)).lower() not in have]
 
 
 def make(card, moved: list[tuple[str, str]], journal_id: str) -> FactoryRecord:
@@ -174,7 +209,7 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
     n = len(rec.entries)
     done_bytes = 0
     for k, e in enumerate(rec.entries):
-        dst_rel = library_copy_path(e.card)
+        dst_rel = library_copy_path(home(e))
         dst = os.path.join(library_root, *dst_rel.split("/"))
         found = _existing(library_root, dst_rel)
         if found:
@@ -191,7 +226,7 @@ def copy_to_library(rec: FactoryRecord, card, library_root: str, mapping=None, p
             out["problems"].append(f"Not on the card: {e.card}")
             continue
         if progress:
-            progress(k, n, f"Copying factory sample {k + 1} of {n}: {e.card[len(PREFIX):]}")
+            progress(k, n, f"Copying factory sample {k + 1} of {n}: {e.card.rsplit('/', 1)[-1]}")
         try:
             local = card.local_path(e.card)
             h = hashlib.sha1()

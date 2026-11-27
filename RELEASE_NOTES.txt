@@ -1,3 +1,15 @@
+Sample Manager. Version 0.15.0 — factory samples sorted by type too.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Sort the card by type… now moves the factory samples too (they have untouched copies in the library's
+  Factory › Deluge): out of SAMPLES/FACTORY into the type folders with everything else, named after their IDs —
+  e.g. SAMPLES/DRUMS/KICK/KK0003_808_KICK.WAV. Every kit, synth and song that uses them is updated.
+- The factory record follows them (in the library and on the card), so the app still knows which samples are
+  factory wherever they are: they stay locked (no rename, trash or Tidy), show 🔒 Factory, and the Factory ›
+  Deluge copies are still checked against them. History › Undo puts the samples and the record back.
+- As before, it goes into the pending tray; use Dry run in the Apply dialog first if you like.
+
 Sample Manager. Version 0.14.0 — the card sorted by type, like TARGETS › DELUGE.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

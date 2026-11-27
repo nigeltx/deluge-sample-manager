@@ -36,6 +36,7 @@ class EditBatch:
     repoints: list[tuple[str, str]] = field(default_factory=list)   # duplicates: every use of a card file -> another
     kind: str = "edit"
     factory: bool = False                                           # the factory move: makes the factory record
+    factory_sort: bool = False                                      # 0.15 Sort the card by type: may move factory files
 
     @property
     def active(self):
@@ -119,7 +120,11 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
     moves: dict[str, str] = {}
     from dsm.edit.factory import is_factory_card
     for b in batches:
-        if not b.factory:
+        if b.factory_sort:                    # factory files may move into the type folders, nothing else
+            for old, new in b.moves:
+                if is_factory_card(new) and not is_factory_card(old):
+                    p.problems.append(f"Factory samples are locked: {new}")
+        elif not b.factory:
             for old, new in b.moves:
                 if is_factory_card(old) or is_factory_card(new):
                     p.problems.append(f"Factory samples are locked: {old if is_factory_card(old) else new}")
@@ -229,7 +234,7 @@ def _prune_empty(card: Card, rels):
 
 
 def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_root: str, full_backup: bool,
-          dry_run: bool = False, progress=None) -> Journal:
+          dry_run: bool = False, progress=None, library_root: str | None = None) -> Journal:
     j = Journal(id=time.strftime("%Y%m%d-%H%M%S"), when=time.strftime("%Y-%m-%d %H:%M"), card_root=card.root,
                 card_serial=card.facts.serial, card_label=card.facts.label, dry_run=dry_run, kind="edit",
                 summary=[b.summary() for b in batches])
@@ -301,7 +306,17 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
                     link.card = kept
                     j.mapping_repoints.append([extra, kept, link.library])
         mapping.save()
-        j.log = [f"moved {o} → {nw}" for o, nw in j.moved] + [f"trashed {t}" for t, _ in j.trashed] + \
+        rec_msgs = []
+        if any(b.factory_sort for b in batches) and j.moved:   # factory samples moved: the record follows them
+            from dsm.edit import factory
+            rec = factory.load(library_root, card)
+            if rec and not rec.undone:
+                j.factory_moves = factory.follow_moves(rec, j.moved)
+                if j.factory_moves:
+                    rec_msgs = factory.save(rec, library_root, card)
+                    rec_msgs.append(f"factory record: {len(j.factory_moves)} samples now in the type folders")
+                    factory.remember(rec)
+        j.log = rec_msgs + [f"moved {o} → {nw}" for o, nw in j.moved] + [f"trashed {t}" for t, _ in j.trashed] + \
                 [f"updated {x.xml} ({len(x.edits)} references)" for x in p.xml]
         j.save()
     except Exception:
@@ -366,7 +381,11 @@ def undo(j: Journal, card: Card, mapping, library_root: str | None = None) -> li
     if library_root is not None or card.exists("DSM/FACTORY_RECORD.JSON"):
         from dsm.edit import factory
         rec = factory.load(library_root, card)
-        if rec and rec.journal_id == j.id and not rec.undone:
+        if rec and getattr(j, "factory_moves", None):              # Sort the card by type: the record goes back too
+            factory.follow_moves(rec, [(new, old) for old, new in j.factory_moves])
+            problems += factory.save(rec, library_root, card)
+            factory.remember(rec)
+        elif rec and rec.journal_id == j.id and not rec.undone:
             rec.undone = True
             problems += factory.save(rec, library_root, card)
     j.undone = True
