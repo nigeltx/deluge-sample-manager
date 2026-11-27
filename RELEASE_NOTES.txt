@@ -1,3 +1,24 @@
+Sample Manager. Version 0.10.0 — duplicates.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+A duplicate is the same audio in more than one file: the same sound data, whatever the file is called and
+whatever else is in its header.
+
+- SMART LISTS › Duplicates in the library: every sound that is in the library more than once, with each copy
+  listed (the details pane shows where the other copies are). The library itself is never changed.
+- ON THE DELUGE › Duplicates on card: reads the card (only files whose length and format match another file's
+  are read in full, so it is quick) and shows each sound with its copies and how many kits, synths and songs
+  use each one.
+  - The copy marked "keep" is a factory copy if there is one, else the one used most. Right-click another
+    copy to keep that one instead, or untick a sound to leave it alone.
+  - Tidy the card points every kit, synth and song at the kept copy and moves the other copies to the card
+    trash, through the pending tray as usual: nothing changes until you press Apply, and History can undo it.
+  - Factory samples, and the Deluge's own recordings and clips (CLIPS, RECORD, RESAMPLE, EXPORTS), are never
+    moved; they show as "stays".
+  - A library sample that was linked to a removed copy is linked to the kept copy instead.
+
 Sample Manager. Version 0.9.2 — a Drone type.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

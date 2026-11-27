@@ -33,12 +33,13 @@ class EditBatch:
     moves: list[tuple[str, str]] = field(default_factory=list)      # card files: old rel -> new rel
     relinks: list[tuple[str, str]] = field(default_factory=list)    # missing path as written -> existing card rel
     trash: list[str] = field(default_factory=list)                  # unused card files to DSM_TRASH
+    repoints: list[tuple[str, str]] = field(default_factory=list)   # duplicates: every use of a card file -> another
     kind: str = "edit"
     factory: bool = False                                           # the factory move: makes the factory record
 
     @property
     def active(self):
-        return self.moves + self.relinks + [(t, "") for t in self.trash]
+        return self.moves + self.relinks + self.repoints + [(t, "") for t in self.trash]
 
     def summary(self) -> str:
         return self.title
@@ -87,6 +88,7 @@ class EditPlan:
     trash: list[str] = field(default_factory=list)
     xml: list[XmlChange] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    repoints: list[tuple[str, str]] = field(default_factory=list)     # duplicate -> the copy kept
 
     @property
     def ref_count(self):
@@ -96,6 +98,8 @@ class EditPlan:
         out = []
         for o, n in self.moves:
             out.append(f"move   {o}\n    →  {n}")
+        for o, n in self.repoints:
+            out.append(f"use    {n}\n    in place of the duplicate {o}")
         for t in self.trash:
             out.append(f"trash  {t}  (to {TRASH_DIR}, recoverable)")
         if self.xml:
@@ -131,7 +135,13 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
                 continue
             moves[old.lower()] = new
     relinks = {old.lower(): new for b in batches for old, new in b.relinks}
+    repoints = {old.lower(): new for b in batches for old, new in b.repoints}
     trash = [t for b in batches for t in b.trash]
+    for b in batches:
+        if not b.factory:
+            for old, _new in b.repoints:
+                if is_factory_card(old):
+                    p.problems.append(f"Factory samples are locked: {old}")
 
     # destinations must be free and distinct (a destination may be a file that is itself moving away)
     leaving = set(moves)
@@ -146,11 +156,16 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
         if not nl.startswith("samples/"):
             p.problems.append(f"Samples must stay inside SAMPLES: {new}")
     for t in trash:
-        if idx.uses(t):
+        if idx.uses(t) and t.lower() not in repoints:
             p.problems.append(f"Still used by {len(idx.uses(t))} presets or songs, so it can't go to the trash: {t}")
     for old_l, new in relinks.items():
         if new.lower() not in card.files and new.lower() not in seen:
             p.problems.append(f"Relink target is not on the card: {new}")
+    for old_l, new in repoints.items():
+        if new.lower() not in card.files:
+            p.problems.append(f"The copy to keep is not on the card: {new}")
+        if new.lower() in repoints:
+            p.problems.append(f"The copy to keep is itself being replaced: {new}")
 
     # final card path of every file
     def final(rel_l: str) -> str | None:
@@ -160,7 +175,10 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
     for doc in idx.docs:
         for r in doc.refs:
             target = None
-            if r.resolved and r.resolved.lower() in moves:
+            if r.resolved and r.resolved.lower() in repoints:
+                tgt = repoints[r.resolved.lower()]
+                target = final(tgt.lower()) or tgt
+            elif r.resolved and r.resolved.lower() in moves:
                 target = moves[r.resolved.lower()]
             elif not r.resolved and r.path.lower() in relinks:
                 tgt = relinks[r.path.lower()]
@@ -176,6 +194,7 @@ def plan(batches: list[EditBatch], idx: CardIndex) -> EditPlan:
             xc.edits.append((r.start, r.end, r.raw, new_raw))
     p.moves = [(card.files[o], n) for o, n in moves.items() if card.files[o] != n]
     p.trash = trash
+    p.repoints = [(card.files.get(o, o), n) for o, n in repoints.items()]
     p.xml = sorted(by_xml.values(), key=lambda x: x.xml.lower())
     return p
 
@@ -276,6 +295,11 @@ def apply(p: EditPlan, batches: list[EditBatch], card: Card, mapping, backup_roo
         for old, new in j.moved:
             if mapping.move_card(old, new):
                 j.mapping_moves.append([old, new])
+        for extra, kept in p.repoints:          # a library sample linked to a removed duplicate now links to the kept one
+            for link in mapping.links:
+                if link.card.lower() == extra.lower():
+                    link.card = kept
+                    j.mapping_repoints.append([extra, kept, link.library])
         mapping.save()
         j.log = [f"moved {o} → {nw}" for o, nw in j.moved] + [f"trashed {t}" for t, _ in j.trashed] + \
                 [f"updated {x.xml} ({len(x.edits)} references)" for x in p.xml]
@@ -333,6 +357,11 @@ def undo(j: Journal, card: Card, mapping, library_root: str | None = None) -> li
     problems += _rollback(restore, card)
     for old, new in j.mapping_moves:
         mapping.move_card(new, old)
+    for extra, kept, lib in j.mapping_repoints:
+        for link in mapping.links:
+            if link.card.lower() == kept.lower() and link.library == lib:
+                link.card = extra
+                break
     mapping.save()
     if library_root is not None or card.exists("DSM/FACTORY_RECORD.JSON"):
         from dsm.edit import factory

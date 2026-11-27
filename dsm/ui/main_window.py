@@ -32,6 +32,7 @@ from dsm.importer.mapping import Mapping
 from dsm.importer.plan import expand
 from dsm.settings import Settings, app_dir
 from dsm.ui.apply_dialog import ApplyDialog, HistoryDialog
+from dsm.ui.duplicates_dialog import DuplicatesDialog
 from dsm.ui.health_dialog import HealthDialog
 from dsm.ui.import_dialog import ImportDialog
 from dsm.ui.library_dialogs import AlertsDialog, GetDialog, ReorganizeDialog
@@ -484,7 +485,7 @@ class MainWindow(QMainWindow):
                     it.setForeground(0, GREY)
                 (parent or root).addChild(it)
                 items[d] = it
-            for name in ("Unused on card", "Won't play on the Deluge"):
+            for name in ("Unused on card", "Won't play on the Deluge", "Duplicates on card"):
                 s = QTreeWidgetItem([f"★ {name}"])
                 s.setData(0, Qt.UserRole, ("smart", name))
                 root.addChild(s)
@@ -585,9 +586,11 @@ class MainWindow(QMainWindow):
         hdr.setData(0, Qt.UserRole, ("libsmarthdr", None))
         self.tree.addTopLevelItem(self._bold(hdr))
         n_on = sum(on.values())
+        dups = self.libdb.duplicate_audios()
         for name, n in (("On the Deluge", n_on if self.card else 0),
                         ("Not on the Deluge", max(0, n_samples - n_on)),
-                        ("Won't play on the Deluge", len(self.libdb.query(listed=True, wont_play=True)))):
+                        ("Won't play on the Deluge", len(self.libdb.query(listed=True, wont_play=True))),
+                        ("Duplicates in the library", len(dups))):
             it = QTreeWidgetItem([f"★ {name}  ({n:,})"])
             it.setData(0, Qt.UserRole, ("libsmart", name))
             if name == "On the Deluge":
@@ -716,10 +719,16 @@ class MainWindow(QMainWindow):
             elif val == "Not on the Deluge":
                 self._list_library([r for r in self.libdb.query(listed=True) if r["audio"] not in on],
                                    "Not on the Deluge")
+            elif val == "Duplicates in the library":
+                rows = self.libdb.duplicate_rows()
+                n = len({r["audio"] for r in rows})
+                self._list_library(rows, f"Duplicates in the library · {n:,} sounds in more than one place")
             else:
                 self._list_library(self.libdb.query(listed=True, wont_play=True), "Won't play on the Deluge")
         elif kind == "smart" and self.index:
-            if val.startswith("Unused"):
+            if val.startswith("Duplicates"):
+                self._find_card_duplicates()
+            elif val.startswith("Unused"):
                 self._list_card(unused_samples(self.index), "Unused on card", show_dir=True)
             else:
                 if not self.health:
@@ -1283,6 +1292,33 @@ class MainWindow(QMainWindow):
                     f"Relink {old.rsplit('/', 1)[-1]} → {new}", relinks=[(old, new)])))
                 dlg.factory.connect(self._initialize_factory)
                 dlg.show()
+        run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
+
+    def _find_card_duplicates(self):
+        """0.10: read the card for files with the same audio, then show the Duplicates dialog."""
+        if not self.index:
+            return
+        idx, card = self.index, self.card
+        self.status_lbl.setText("Looking for duplicates on the card…" + (" (over USB this can take a while)"
+                                                                         if card.is_usb else ""))
+
+        def work(progress):
+            from dsm.edit import duplicates as dup
+            return dup.card_groups(card, idx, progress=progress)
+
+        def done(groups):
+            self.prog.hide()
+            if self.card is not card:
+                return
+            if not groups:
+                self.status_lbl.setText("No duplicates on the card.")
+                QMessageBox.information(self, APP_NAME, "No sample is on the card more than once.")
+                return
+            self.status_lbl.setText(f"{len(groups)} sounds are on the card more than once.")
+            dlg = DuplicatesDialog(groups, card.facts.label or card.root, self)
+            dlg.show_path.connect(self.select_card_path)
+            dlg.tidy.connect(self._add_edit)
+            dlg.show()
         run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
 
     def _list_wont_play(self):

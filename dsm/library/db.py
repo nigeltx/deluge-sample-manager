@@ -206,6 +206,17 @@ class LibraryDB:
             rows = [r for r in rows if r["audio"] in audios]
         return rows
 
+    def duplicate_audios(self) -> dict[str, int]:
+        """{identity: number of copies} for every sound in the library more than once (0.10)."""
+        return {r[0]: r[1] for r in self.q("SELECT audio, COUNT(*) FROM sample WHERE audio IS NOT NULL "
+                                           "AND area != 'Samples' GROUP BY audio HAVING COUNT(*) > 1")}
+
+    def duplicate_rows(self, limit: int = 20000) -> list[sqlite3.Row]:
+        """Every copy of every sound that is in the library more than once, copies of one sound together."""
+        return self.q("SELECT * FROM (" + SELECT + ") s WHERE s.area != 'Samples' AND s.audio IN "
+                      "(SELECT audio FROM sample WHERE audio IS NOT NULL AND area != 'Samples' "
+                      "GROUP BY audio HAVING COUNT(*) > 1) ORDER BY s.audio, lower(s.rel) LIMIT ?", (limit,))
+
     def row(self, rel: str):
         r = self.q(SELECT + " WHERE s.rel = ?", (rel,))
         return r[0] if r else None
