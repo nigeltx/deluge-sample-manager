@@ -1,3 +1,28 @@
+Sample Manager. Version 0.12.0 — the Syntakt.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+The Syntakt
+- With the Syntakt connected by USB, TARGETS › SYNTAKT lists its 64 sample slots by type, with each sample's ID
+  when it is in the library. Click one to hear it: it is read from the Syntakt once, then from the PC.
+- The Twin Shot check compares the Syntakt with Factory › Syntakt in the library (by name and length — the
+  Syntakt keeps its samples at 48 kHz, so the audio itself differs): "Twin Shot pack complete", or what differs.
+  Right-click SYNTAKT › Twin Shot check… for the details.
+- A Syntakt column in the list shows the slot of every library sample that is on the Syntakt.
+- Send: right-click library samples › Send to the Syntakt… puts converted copies (48 kHz 16-bit mono, names cut
+  to 16 characters) into EMPTY slots. Factory samples, and samples the app didn't put there, are never replaced,
+  because every project using a sample would change. Your Syntakt's 64 slots are all in use, so for now there is
+  no room — that is expected.
+- Remove (only samples the app put there), Undo the last Syntakt change, Back up all its samples to
+  Backups › Syntakt, and Get from Syntakt (samples that aren't in the library, into User) are on the right-click
+  menus. Every change saves the slot first and reads the result back. Restart the Syntakt to use changed samples.
+- The Syntakt is looked for at start and on Refresh. Close the Patch Manager, Overbridge and Elektron Transfer
+  first: only one program can use its USB MIDI at a time.
+
+Fixed
+- A background job could finish without the window hearing about it, so a sample could stay on "Loading…".
+
 Sample Manager. Version 0.11.1 — a tidier left pane.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

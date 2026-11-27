@@ -31,19 +31,40 @@ class Job(QRunnable):
         try:
             if self.wants_progress:
                 self.kw["progress"] = lambda i, n, s="": self.signals.progress.emit(i, n, s)
-            self.signals.done.emit(self.fn(*self.args, **self.kw))
+            result = self.fn(*self.args, **self.kw)
         except Exception as e:  # noqa: BLE001
             log.error("Background job failed\n%s", traceback.format_exc())
-            self.signals.failed.emit(f"{e.__class__.__name__}: {e}")
+            try:
+                self.signals.failed.emit(f"{e.__class__.__name__}: {e}")
+            except RuntimeError:            # the window has closed while the job ran
+                pass
+            return
+        try:
+            self.signals.done.emit(result)
+        except RuntimeError:                # the window has closed while the job ran
+            pass
+
+
+_RUNNING: set = set()        # every job's signals stay referenced until it finishes (0.12 fix, see run_job)
 
 
 def run_job(job: Job, done=None, failed=None, progress=None) -> Job:
+    """Start job on the thread pool. Its signals object is kept alive here until done or failed has been delivered:
+    without that, Python could free a job nobody else holds while it was still running, and its result was silently
+    lost (found in 0.12 — a sample could stay on "Loading…" for ever)."""
+    sig = job.signals
+    _RUNNING.add(sig)
+
+    def finish(*_):
+        _RUNNING.discard(sig)
     if done:
-        job.signals.done.connect(done)
+        sig.done.connect(done)
     if failed:
-        job.signals.failed.connect(failed)
+        sig.failed.connect(failed)
+    sig.done.connect(finish)
+    sig.failed.connect(finish)
     if progress:
-        job.signals.progress.connect(progress)
+        sig.progress.connect(progress)
     QThreadPool.globalInstance().start(job)
     return job
 

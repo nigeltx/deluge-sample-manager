@@ -36,6 +36,7 @@ from dsm.ui.duplicates_dialog import DuplicatesDialog
 from dsm.ui.health_dialog import HealthDialog
 from dsm.ui.import_dialog import ImportDialog
 from dsm.ui.library_dialogs import AlertsDialog, GetDialog, ReorganizeDialog
+from dsm.ui.syntakt_ui import SyntaktMixin
 from dsm.ui.type_dialog import TypeDialog
 from dsm.ui.widgets import Job, Waveform, run_job
 
@@ -63,7 +64,7 @@ def human_size(n: int) -> str:
     return f"{n:.1f} PB"
 
 
-class MainWindow(QMainWindow):
+class MainWindow(SyntaktMixin, QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self.origin_by_audio: dict[str, str] = {} # audio identity → Factory/Paid/Free/User of the copy that counts
         self.pack_by_audio: dict[str, str] = {}   # audio identity → its pack in the library
         self._offered_reorganize = False
+        self._syn_init()
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1400, 860)
@@ -232,9 +234,9 @@ class MainWindow(QMainWindow):
         self.warn.setStyleSheet("background:#fbe6d6;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         self.warn.hide()
         ml.addWidget(self.warn)
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(["Name", "Pack", "Source", "Deluge", "Length", "kHz/bit", "Used", "Plays",
-                                              "Type"])
+                                              "Type", "Syntakt"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -246,9 +248,10 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.Interactive)
         self.table.setColumnWidth(1, 150)
-        for c in range(2, 9):
+        for c in range(2, 10):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hh.moveSection(8, 1)                    # Type shows next to Name
+        hh.moveSection(9, 5)                    # Syntakt after Deluge
         self.table.currentCellChanged.connect(lambda r, *_: self._row_select(r))
         self.table.installEventFilter(self)
         ml.addWidget(self.table, 1)
@@ -351,6 +354,7 @@ class MainWindow(QMainWindow):
         else:
             self.status_lbl.setText("No Deluge card found. Put the card in the reader and press Refresh, "
                                     "or choose a folder from the Card list.")
+        QTimer.singleShot(1500, self._syn_connect)
 
     def _fill_card_box(self):
         self.card_box.clear()
@@ -381,6 +385,8 @@ class MainWindow(QMainWindow):
 
     def _refresh(self):
         self._fill_card_box()
+        if self.card or self.syn:
+            self._syn_connect()
         if self.card and self.card.is_usb:
             self._open_usb(reuse=True)
         elif self.card and os.path.isdir(self.card.root):
@@ -606,6 +612,7 @@ class MainWindow(QMainWindow):
             dv.setData(0, Qt.UserRole, ("devroot", None))
             dv.setForeground(0, GREY)
             tg.addChild(dv)
+        self._syn_tree(tg)
         tg.setExpanded(True)
         hdr = QTreeWidgetItem(["SMART LISTS"])
         hdr.setData(0, Qt.UserRole, ("libsmarthdr", None))
@@ -629,7 +636,7 @@ class MainWindow(QMainWindow):
                 hdr.addChild(it)
         hdr.setExpanded(True)
         self.tree.blockSignals(False)
-        if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot"):
+        if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot"):
             it = self._find_tree_item(sel)
             if it:
                 self.tree.setCurrentItem(it)
@@ -745,6 +752,11 @@ class MainWindow(QMainWindow):
             folders = set(layout.DRUM_FOLDERS) if val == "Drums" else {val}
             self._list_card(sorted((r for r, f in self.card_types.items() if f in folders), key=str.lower),
                             f"Deluge › {stypes.label(val)}")
+        elif kind == "synroot" and val:
+            self._syn_list(None, "Syntakt")
+        elif kind == "syntype":
+            folders = set(layout.DRUM_FOLDERS) if val == "Drums" else {val}
+            self._syn_list(folders, f"Syntakt › {stypes.label(val)}")
         elif kind == "srcq":
             q = dict(val)
             title = " › ".join(["Library"] + [q[k] for k in ("source", "level1", "level2") if q.get(k)])
@@ -937,7 +949,7 @@ class MainWindow(QMainWindow):
         cur = self.tree.currentItem()
         kind = (cur.data(0, Qt.UserRole) or (None,))[0] if cur else None
         self._build_library_root()              # reselecting a library item lists it again
-        if kind in ("samples", "samplesroot", "srcq", "libsmart", "devtype", "devroot"):
+        if kind in ("samples", "samplesroot", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot"):
             return
         if kind is None and self.search.text().strip():
             self._do_search()
@@ -1003,6 +1015,14 @@ class MainWindow(QMainWindow):
             if not row["type_by_user"]:
                 ty.setForeground(GREY)
             self.table.setItem(i, 8, ty)
+            sy = getattr(self, "on_syntakt", {}).get(row.get("audio")) if row["where"] != "syntakt" else row["slot"]
+            si = QTableWidgetItem()
+            if sy:
+                si.setData(Qt.DisplayRole, sy)
+                si.setToolTip(f"On the Syntakt, slot {sy}")
+            si.setForeground(GREEN)
+            si.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 9, si)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
@@ -1085,6 +1105,8 @@ class MainWindow(QMainWindow):
         if row["where"] == "card":
             return factory.origin(row["rel"], on_card=True)
         rel = row.get("librel", "")
+        if row["where"] == "syntakt" and not rel:
+            return "Syntakt"
         top = rel.split("/")[0].title() if "/" in rel else ""
         return top if top in layout.SOURCE_TYPES else "Other"
 
@@ -1147,8 +1169,10 @@ class MainWindow(QMainWindow):
         self._load_audio(row)
 
     def _load_audio(self, row, then_play=False):
-        self.wave.set_data(None, message="Loading…" if row["where"] == "lib" or not self.card.is_usb
+        self.wave.set_data(None, message="Fetching from the Syntakt…" if row["where"] == "syntakt" else
+                           "Loading…" if row["where"] == "lib" or not self.card.is_usb
                            else "Fetching from the Deluge over USB…")
+        syn, slot = self.syn, (self.syn.slot(row["slot"]) if row["where"] == "syntakt" and self.syn else None)
         path, card = row["abs"], self.card
         rel = row.get("rel")
 
@@ -1156,7 +1180,11 @@ class MainWindow(QMainWindow):
         librel = row.get("librel") if row.get("in_zip") else None
 
         def work():
-            if librel:                      # a sample inside a zip: unpacked once to the audition cache (spec 2.2)
+            if row["where"] == "syntakt":   # read from the Syntakt once, then from the PC cache
+                if slot is None:
+                    raise RuntimeError("the Syntakt isn't connected")
+                src = syn.wav(slot)
+            elif librel:                    # a sample inside a zip: unpacked once to the audition cache (spec 2.2)
                 src = lsrc.materialize(root, librel, os.path.join(app_dir(), "cache"))
             else:
                 src = card.read_for_playback(rel) if row["where"] == "card" and card.is_usb else path
@@ -1229,6 +1257,12 @@ class MainWindow(QMainWindow):
                 self.used.addItem(it)
             if not refs:
                 self.used.addItem("On the card, but nothing there uses it yet.")
+        elif row["where"] == "syntakt":
+            self.used_lbl.setText("ON THE SYNTAKT")
+            self.used.addItem(f"Slot {row['slot']} · {row['file_name']}")
+            self.used.addItem(f"Matched to the library: {row['how']}" if row.get("how") else
+                              "Not in the library — right-click SYNTAKT › Get from Syntakt… to keep it")
+            self.used.addItem("Samples are global on the Syntakt; the app can't see which projects use one.")
         else:
             self.used_lbl.setText("USED BY")
             self.used.addItem("Library file — not on the card.")
@@ -1435,6 +1469,9 @@ class MainWindow(QMainWindow):
                             + (f" (+{len(others) - 3} more)" if len(others) > 3 else ""))
         on = self.on_deluge.get(a)
         bits.append(f"On the Deluge: {on}" if on else ("Deluge: not there" if self.card else "Deluge: no card open"))
+        if self.syn:
+            sl = self.on_syntakt.get(a) if a else (row.get("slot") if row["where"] == "syntakt" else None)
+            bits.append(f"On the Syntakt: slot {sl}" if sl else "Syntakt: not there")
         return "\n".join(bits)
 
     def _import_files_dialog(self):
@@ -1485,9 +1522,20 @@ class MainWindow(QMainWindow):
             unused = [r for r in card_rows if not self.index.uses(r["rel"])]
             if unused:
                 acts[m.addAction(f"Move {len(unused)} unused to the card trash")] = "trash"
+        syn_rows = [r for r in rows if r and r["where"] == "syntakt"]
+        if self.syn:
+            to_syn = [r for r in lib_rows if r.get("audio") not in self.on_syntakt]
+            if to_syn:
+                acts[m.addAction(f"Send {len(to_syn)} to the Syntakt…")] = "syn-send"
+            if syn_rows:
+                acts[m.addAction(f"Remove {len(syn_rows)} from the Syntakt…")] = "syn-remove"
         if not acts:
             return
         what = acts.get(m.exec(self.table.viewport().mapToGlobal(pos)))
+        if what == "syn-send":
+            self._syn_send(to_syn)
+        elif what == "syn-remove":
+            self._syn_remove(syn_rows)
         if what == "type":
             self._set_type(all_lib)
         elif what == "send":
@@ -1536,6 +1584,9 @@ class MainWindow(QMainWindow):
             if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
                 folders = None if d[0] == "devroot" else (set(layout.DRUM_FOLDERS) if d[1] == "Drums" else {d[1]})
                 self._rename_to_ids(folders)
+            return
+        if d and d[0] in ("synroot", "syntype"):
+            self._syn_tree_menu(d, pos)
             return
         if d and d[0] in ("srcq", "sourcesroot"):
             m = QMenu(self)
@@ -2032,5 +2083,6 @@ class MainWindow(QMainWindow):
             return
         self._stop()
         self._close_usb()
+        self._syn_close()
         self.settings.save()
         super().closeEvent(e)

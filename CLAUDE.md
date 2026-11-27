@@ -27,8 +27,15 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   The workflow also publishes the installer as DelugeSampleManager-Setup-x.exe so 0.8.1 can update across the rename
 - `dsm/library/ids.py` — sample IDs (0.11): type code + number + name, e.g. "HO0046 Fun Hat"; one per sound (audio identity),
   numbers per code never reused (db tables sid, sid_last; db.assign_ids runs at the end of refresh_view); a type change gives a new ID
+- `dsm/syntakt` — 0.12, the Syntakt's +Drive samples over USB (bench-tested 27 Nov 2026, findings in the claude.ai project
+  claude/syntakt-bench-test/sample-findings-2026-11-27.md): `proto.py` the Elektron protocol and sample format (read/write by
+  slot, footer in its own block, 48 kHz 16-bit mono big-endian, names 16 chars); `device.py` slots, matching to Factory › Syntakt
+  by name + 48 kHz length (audio identity can't match: the Syntakt resamples), Twin Shot check, Send/Remove only into empty or
+  app-filled slots (record _Sample Manager/syntakt.json), backups to Backups › Syntakt, journal + Undo. `ui/syntakt_ui.py` the
+  window side (a mixin of MainWindow). `tests/fake_syntakt.py` answers like the real one (refuses a footer sent with the audio).
+  Syntakt changes don't use the pending tray: each asks first, backs up, reads back. The Syntakt needs a restart to use new samples.
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
-- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE (samples on the card by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
+- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE and › SYNTAKT (samples on each device by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
 - `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer and
   publishes a GitHub release on every push to main
