@@ -1027,6 +1027,7 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         for i, row in enumerate(rows):
             it = QTableWidgetItem(row["name"])
             it.setData(Qt.UserRole, i)          # index into self.rows (Qt would copy a dict)
+            row["_item"] = it                   # so one row can be found again after sorting
             on_card = self._on_card(row)
             row["on_card"] = on_card
             if on_card:
@@ -1235,12 +1236,9 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
     def _audio_loaded(self, res):
         path, data, rate, pk, then_play, acid = res
         if acid:                                 # the file's acid chunk gave a tempo or root note (spec 8.3)
-            self._tags_reload()
-            self._refresh_tag_cells()
+            self._touch([acid])
         if not self.current or self.current["abs"] != path:
             return
-        if acid:
-            self._show_tags(self.current)
         self.audio = (data, rate)
         info = self.current.get("info")
         loop = (info.loop_start, info.loop_end) if info and info.loop_end else None

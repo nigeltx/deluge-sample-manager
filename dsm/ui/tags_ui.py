@@ -42,6 +42,8 @@ class TagsMixin:
         self._all_cache = None           # (key, rows, ctxs) — every listed library sample, for saved lists
         self._rows_gen = 0               # goes up when the library's rows change (scan, Set type)
         self._saved_counts: dict = {}
+        self._meta_ver: dict = {}        # audio → n: goes up when that sample's tags or tempo change
+        self._ctx_dirty: set = set()     # samples whose cached search context must be worked out again
 
     def _tags_file(self, name: str) -> str | None:
         root = self.settings["library_root"]
@@ -89,10 +91,10 @@ class TagsMixin:
 
     def _meta(self, row) -> dict:
         """Tags (yours, guessed), BPM and key of a row, worked out once per data generation."""
-        m = row.get("_meta")
-        if m and m["gen"] == self._data_gen:
-            return m
         a = row.get("audio")
+        m = row.get("_meta")
+        if m and m["gen"] == self._data_gen and m["v"] == self._meta_ver.get(a, 0):
+            return m
         t = self.tag_map.get(a, {"yes": set(), "no": set()}) if a else {"yes": set(), "no": set()}
         path = self._path_of(row)
         guess = [g for g in ltags.guesses(path, self.vocab) if g not in t["yes"] and g not in t["no"]] \
@@ -100,7 +102,7 @@ class TagsMixin:
         self._row_types(row)
         tonal = not any(x in stypes.DRUMS for x in row["types"])
         tk = tempokey.resolve(path, bool(row.get("is_loop")), self.tempo_map.get(a) if a else None, tonal)
-        m = {"gen": self._data_gen, "yes": sorted(t["yes"]), "guess": guess, **tk}
+        m = {"gen": self._data_gen, "v": self._meta_ver.get(a, 0), "yes": sorted(t["yes"]), "guess": guess, **tk}
         row["_meta"] = m
         return m
 
@@ -132,36 +134,51 @@ class TagsMixin:
         return self._dupe_set
 
     # ---------------------------------------------------------------- list columns
+    def _cell(self, i, col):
+        """The item at (i, col), made if missing. Items are changed in place: replacing items in a big table one
+        by one is very slow."""
+        it = self.table.item(i, col)
+        if it is None:
+            it = QTableWidgetItem()
+            self.table.setItem(i, col, it)
+        return it
+
     def _fill_tag_cells(self, i, row):
         m = self._meta(row)
-        b = QTableWidgetItem()
-        if m["bpm"]:
-            b.setData(Qt.DisplayRole, float(m["bpm"]))
-            b.setToolTip(f"{tempokey.fmt_bpm(m['bpm'])} BPM ({m['bpm_how']})")
-            if m["bpm_how"] != "set by you":
-                b.setForeground(GREY)
-        self.table.setItem(i, COL_BPM, b)
-        k = QTableWidgetItem(m["key"] or "")
-        if m["key"]:
-            k.setToolTip(f"{m['key']} ({m['key_how']})")
-            if m["key_how"] != "set by you":
-                k.setForeground(GREY)
-        self.table.setItem(i, COL_KEY, k)
-        txt = ", ".join(m["yes"] + [g + "?" for g in m["guess"]])
-        t = QTableWidgetItem(txt)
-        if m["guess"]:
-            t.setToolTip("A ? marks a tag guessed from the pack name: confirm it in the details pane")
-        if not m["yes"] and m["guess"]:
-            t.setForeground(GREY)
-        self.table.setItem(i, COL_TAGS, t)
+        b = self._cell(i, COL_BPM)
+        b.setData(Qt.DisplayRole, float(m["bpm"]) if m["bpm"] else None)
+        b.setToolTip(f"{tempokey.fmt_bpm(m['bpm'])} BPM ({m['bpm_how']})" if m["bpm"] else "")
+        b.setData(Qt.ForegroundRole, None if m["bpm_how"] == "set by you" else GREY)
+        k = self._cell(i, COL_KEY)
+        k.setText(m["key"] or "")
+        k.setToolTip(f"{m['key']} ({m['key_how']})" if m["key"] else "")
+        k.setData(Qt.ForegroundRole, None if m["key_how"] == "set by you" else GREY)
+        t = self._cell(i, COL_TAGS)
+        t.setText(", ".join(m["yes"] + [g + "?" for g in m["guess"]]))
+        t.setToolTip("A ? marks a tag guessed from the pack name: confirm it in the details pane" if m["guess"] else "")
+        t.setData(Qt.ForegroundRole, GREY if not m["yes"] and m["guess"] else None)
 
-    def _refresh_tag_cells(self):
-        self.table.setSortingEnabled(False)
-        for r in range(self.table.rowCount()):
-            row = self._row_at(r)
-            if row is not None:
-                self._fill_tag_cells(r, row)
-        self.table.setSortingEnabled(True)
+    def _refresh_tag_cells(self, audios=None):
+        """Fill the BPM, Key and Tags cells again — of every row, or only the rows of the samples given
+        (a big list takes long to refill, so a change to one sample touches only its rows)."""
+        whole = audios is None
+        if whole:                           # turning sorting back on sorts the whole list again: only for all rows
+            self.table.setSortingEnabled(False)
+        self.table.setUpdatesEnabled(False)
+        try:
+            for row in self.rows:
+                if audios is not None and row.get("audio") not in audios:
+                    continue
+                it = row.get("_item")
+                r = self.table.row(it) if it is not None else -1
+                if r >= 0:
+                    self._fill_tag_cells(r, row)
+        except RuntimeError:                # the list was refilled meanwhile: its old items are gone
+            pass
+        finally:
+            self.table.setUpdatesEnabled(True)
+            if whole:
+                self.table.setSortingEnabled(True)
 
     # ---------------------------------------------------------------- the details pane
     def _build_tag_rows(self, form):
@@ -222,14 +239,30 @@ class TagsMixin:
         if not audios:
             return
         self.libdb.set_tags(audios, add=list(add), remove=list(remove))
-        self._after_tag_change()
+        self._after_tag_change(audios)
 
-    def _after_tag_change(self):
-        self._tags_save()
-        self._tags_reload()
-        self._refresh_tag_cells()
-        if self.current:
+    def _touch(self, audios):
+        """Some samples' tags or tempo changed: reread the small tables, and redo only those samples' rows."""
+        audios = set(audios)
+        for a in audios:
+            self._meta_ver[a] = self._meta_ver.get(a, 0) + 1
+        self._ctx_dirty |= audios
+        for a in audios:
+            self.tag_map.pop(a, None)
+            self.tempo_map.pop(a, None)
+        for r in self.libdb.q(f"SELECT audio, tag, state FROM tag WHERE audio IN ({','.join('?' * len(audios))})",
+                              list(audios)):
+            self.tag_map.setdefault(r["audio"], {"yes": set(), "no": set()})[r["state"]].add(r["tag"])
+        for r in self.libdb.q(f"SELECT * FROM tempo_key WHERE audio IN ({','.join('?' * len(audios))})", list(audios)):
+            self.tempo_map[r["audio"]] = r
+        self._refresh_tag_cells(audios)
+        if self.current and self.current.get("audio") in audios:
             self._show_tags(self.current)
+
+    def _after_tag_change(self, audios):
+        self._tags_save()
+        self._touch(audios)
+        self.tagbox.set_words(ltags.vocab_words(self.vocab) + self.libdb.tags_in_use())
         QTimer.singleShot(0, self._update_saved_counts)
 
     def _bpm_typed(self):
@@ -244,7 +277,7 @@ class TagsMixin:
             self.bpm_how.setText("a number, such as 145")
             return
         self.libdb.set_tempo([self.current["audio"]], bpm=v, set_bpm=True)
-        self._after_tag_change()
+        self._after_tag_change([self.current["audio"]])
 
     def _key_typed(self):
         if not self.current or not self.current.get("audio"):
@@ -258,7 +291,7 @@ class TagsMixin:
             self.key_how.setText("a key, such as F#m")
             return
         self.libdb.set_tempo([self.current["audio"]], key=k, set_key=True)
-        self._after_tag_change()
+        self._after_tag_change([self.current["audio"]])
 
     # ---------------------------------------------------------------- Tags… for many
     def _tags_dialog(self, rows):
@@ -276,7 +309,7 @@ class TagsMixin:
         self.libdb.set_tags(audios, add=v["add"], remove=v["remove"])
         if v["bpm"][0] or v["key"][0]:
             self.libdb.set_tempo(audios, bpm=v["bpm"][1], key=v["key"][1], set_bpm=v["bpm"][0], set_key=v["key"][0])
-        self._after_tag_change()
+        self._after_tag_change(audios)
         self.status_lbl.setText(f"Tags updated for {len(audios):,} sample{'s' if len(audios) != 1 else ''}")
 
     def _confirm_pack_guesses(self, q: dict):
@@ -298,7 +331,7 @@ class TagsMixin:
                                 "samples?\n\nGuesses you took off stay off.") != QMessageBox.Yes:
             return
         n = self.libdb.confirm_tags(pairs)
-        self._after_tag_change()
+        self._after_tag_change({a for a, _ in pairs})
         self.status_lbl.setText(f"Confirmed {n:,} guessed tags")
 
     def _vocab_dialog(self):
@@ -366,7 +399,7 @@ class TagsMixin:
         except Exception:                  # noqa: BLE001
             return
         self.libdb.set_acid([(a, t, r)])
-        return t is not None or r is not None
+        return a if (t is not None or r is not None) else None
 
     # ---------------------------------------------------------------- search (8.4)
     def _search_rows(self, terms, rows):
@@ -466,7 +499,7 @@ class TagsMixin:
 
     def _all_library(self):
         """Every listed library sample with its search context. The rows are kept until the library changes; the
-        contexts until tags, tempos or the devices change."""
+        contexts until the devices change, and a changed sample's context is worked out again on its own."""
         rkey = self._rows_gen
         ckey = (self._data_gen, len(self.on_deluge), len(getattr(self, "on_syntakt", {})))
         if not self._all_cache or self._all_cache[0] != rkey:
@@ -474,11 +507,21 @@ class TagsMixin:
             for r in rows:
                 self._row_types(r)
                 r["origin"] = self._origin(r)
-            self._all_cache = (rkey, rows, None, None)
+            where: dict = {}
+            for i, r in enumerate(rows):
+                where.setdefault(r.get("audio"), []).append(i)
+            self._all_cache = (rkey, rows, None, None, where)
+        rows, where = self._all_cache[1], self._all_cache[4]
         if self._all_cache[2] != ckey:
-            rows = self._all_cache[1]
-            self._all_cache = (rkey, rows, ckey, [self._ctx(r) for r in rows])
-        return self._all_cache[1], self._all_cache[3]
+            self._ctx_dirty = set()
+            self._all_cache = (rkey, rows, ckey, [self._ctx(r) for r in rows], where)
+        elif self._ctx_dirty:
+            dirty, self._ctx_dirty = self._ctx_dirty, set()
+            ctxs = self._all_cache[3]
+            for a in dirty:
+                for i in where.get(a, ()):
+                    ctxs[i] = self._ctx(rows[i])
+        return rows, self._all_cache[3]
 
     def _warm_search(self):
         """Work out every sample's search context in the background, so the first search is quick."""
