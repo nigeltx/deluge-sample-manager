@@ -487,6 +487,12 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         self.factory_rec = factory.load(self.settings["library_root"], self.card)
         if self.factory_rec and self.factory_rec.undone:
             self.factory_rec = None
+        if self.factory_rec:
+            gone = factory.drop_non_audio(self.factory_rec)
+            if gone:                             # e.g. .reapeaks files: not samples, so not factory samples either
+                lib = self.settings["library_root"]
+                probs = factory.save(self.factory_rec, lib if lib and os.path.isdir(lib) else None, self.card)
+                log.info("Factory record: dropped %d files that aren't samples: %s %s", len(gone), gone, probs)
         factory.remember(self.factory_rec)
         self._refresh_devices()
         QTimer.singleShot(0, self._build_library_root)

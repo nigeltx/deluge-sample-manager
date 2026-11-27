@@ -148,10 +148,25 @@ def missing_from_library(rec: FactoryRecord, library_root: str) -> list[Entry]:
     return [e for e in rec.entries if library_copy_path(home(e)).lower() not in have]
 
 
+def is_audio(rel: str) -> bool:
+    from dsm.audio.inspect import AUDIO_EXTS
+    return os.path.splitext(rel)[1].lower() in AUDIO_EXTS
+
+
+def drop_non_audio(rec: FactoryRecord) -> list[str]:
+    """Take files that aren't samples out of the record — such as REAPER's .reapeaks files that sat beside the
+    factory claps (0.15.2). Initialize recorded every file in the factory folders; the Deluge reads only audio.
+    Returns the card paths dropped."""
+    gone = [e.card for e in rec.entries if not is_audio(e.card)]
+    if gone:
+        rec.entries = [e for e in rec.entries if is_audio(e.card)]
+    return gone
+
+
 def make(card, moved: list[tuple[str, str]], journal_id: str) -> FactoryRecord:
     rec = FactoryRecord(made=time.strftime("%Y-%m-%d %H:%M"), journal_id=journal_id, card_label=card.facts.label)
     for old, new in moved:
-        if not new.upper().startswith(PREFIX):
+        if not new.upper().startswith(PREFIX) or not is_audio(new):
             continue
         try:
             size, mtime = card.stat(new)

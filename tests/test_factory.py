@@ -157,3 +157,16 @@ def test_sort_moves_factory_and_record_follows(card, tmp_path):
     assert card.exists(kick) and factory.load(lib).by_card().get(kick.lower())
     assert factory.is_factory_card(kick)
     factory.remember(None)
+
+
+def test_non_audio_files_leave_the_record(card, tmp_path):
+    """0.15.2: files that aren't samples (REAPER's .reapeaks) are not factory samples: never recorded, and dropped
+    from an older record."""
+    open(card.abs("SAMPLES/OLDSTUFF/KICKS/kick_unused.wav.reapeaks"), "wb").write(b"RPKx")
+    card.scan()
+    rec, lib, m, j = _factory_move(card, tmp_path)
+    assert all(factory.is_audio(e.card) for e in rec.entries) and len(rec.entries) == 2
+    rec.entries.append(factory.Entry(original="SAMPLES/DRUMS/Clap/808 Clap.WAV.reapeaks",
+                                     card="SAMPLES/FACTORY/DRUMS/Clap/808 Clap.WAV.reapeaks", size=10, mtime=0))
+    assert factory.drop_non_audio(rec) == ["SAMPLES/FACTORY/DRUMS/Clap/808 Clap.WAV.reapeaks"]
+    assert len(rec.entries) == 2 and factory.drop_non_audio(rec) == []
