@@ -13,6 +13,10 @@ Tables
   user_type    types set by hand (Set type…), by audio identity, so they follow the sample wherever its copies are.
   listed       the by-type view (spec 2.3): one row per sample — the copy that counts — with its type list and
                whether it is a loop. Worked out again by refresh_view() after every scan and Set type.
+  tag          0.13 (spec v2.4 8.2): (audio, tag, state) — state 'yes' for your tags and confirmed guesses,
+               'no' for a guess you took off. Kept in _Sample Manager\\tags.json too (tags.py).
+  tempo_key    0.13 (8.3): per audio identity, the BPM and key you typed (bpm, key) and what the file's acid
+               chunk says (acid_bpm, acid_root). Names are read on the fly (tempokey.py).
 """
 from __future__ import annotations
 
@@ -52,6 +56,11 @@ CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 -- sample IDs (ids.py): one per sound, by audio identity; sid_last keeps the highest number ever given per type code
 CREATE TABLE IF NOT EXISTS sid (audio TEXT PRIMARY KEY, code TEXT, num INTEGER, name TEXT);
 CREATE TABLE IF NOT EXISTS sid_last (code TEXT PRIMARY KEY, last INTEGER);
+-- tags and tempo/key (0.13)
+CREATE TABLE IF NOT EXISTS tag (audio TEXT, tag TEXT, state TEXT, PRIMARY KEY (audio, tag));
+CREATE INDEX IF NOT EXISTS tag_tag ON tag(tag);
+CREATE TABLE IF NOT EXISTS tempo_key (audio TEXT PRIMARY KEY, bpm REAL, key TEXT, acid_bpm REAL, acid_root INTEGER,
+                                      acid_read INTEGER);
 """
 
 SCHEMA_VERSION = "2"
@@ -405,6 +414,91 @@ class LibraryDB:
     def listed_folders(self) -> dict[str, str]:
         """{audio: type list} for every listed sample."""
         return {r["audio"]: r["folder"] for r in self.q("SELECT audio, folder FROM listed")}
+
+    # ------------------------------------------------------------------ tags (0.13, spec 8.2)
+    def tag_map(self) -> dict[str, dict[str, set]]:
+        """{audio: {'yes': {tags}, 'no': {tags}}}"""
+        out: dict = {}
+        for r in self.q("SELECT audio, tag, state FROM tag"):
+            out.setdefault(r["audio"], {"yes": set(), "no": set()})[r["state"]].add(r["tag"])
+        return out
+
+    def set_tags(self, audios, add=(), remove=()):
+        """Add tags (state yes) to every sample given, and take tags off (state no, so a guess stays off)."""
+        with self.lock:
+            for a in audios:
+                for t in add:
+                    self.con.execute("INSERT OR REPLACE INTO tag (audio, tag, state) VALUES (?,?,'yes')", (a, t))
+                for t in remove:
+                    self.con.execute("INSERT OR REPLACE INTO tag (audio, tag, state) VALUES (?,?,'no')", (a, t))
+            self.con.commit()
+
+    def confirm_tags(self, pairs) -> int:
+        """Confirm guessed tags [(audio, tag)], leaving alone any you took off. Returns how many were new."""
+        n = 0
+        with self.lock:
+            for a, t in pairs:
+                cur = self.con.execute("INSERT OR IGNORE INTO tag (audio, tag, state) VALUES (?,?,'yes')", (a, t))
+                n += cur.rowcount
+            self.con.commit()
+        return n
+
+    def tags_in_use(self) -> list[str]:
+        return [r[0] for r in self.q("SELECT DISTINCT tag FROM tag WHERE state = 'yes' ORDER BY tag")]
+
+    # ------------------------------------------------------------------ tempo and key (0.13, spec 8.3)
+    def tempo_map(self) -> dict[str, sqlite3.Row]:
+        return {r["audio"]: r for r in self.q("SELECT * FROM tempo_key")}
+
+    def set_tempo(self, audios, bpm=None, key=None, set_bpm=False, set_key=False):
+        """Your BPM and/or key for samples; None with set_bpm / set_key clears what you typed."""
+        with self.lock:
+            for a in audios:
+                self.con.execute("INSERT OR IGNORE INTO tempo_key (audio) VALUES (?)", (a,))
+                if set_bpm:
+                    self.con.execute("UPDATE tempo_key SET bpm = ? WHERE audio = ?", (bpm, a))
+                if set_key:
+                    self.con.execute("UPDATE tempo_key SET key = ? WHERE audio = ?", (key, a))
+            self.con.commit()
+
+    def set_acid(self, items):
+        """[(audio, tempo, root note)] read from files' acid chunks (None, None when a file has none)."""
+        with self.lock:
+            for a, t, r in items:
+                self.con.execute("INSERT OR IGNORE INTO tempo_key (audio) VALUES (?)", (a,))
+                self.con.execute("UPDATE tempo_key SET acid_bpm = ?, acid_root = ?, acid_read = 1 WHERE audio = ?",
+                                 (t, r, a))
+            self.con.commit()
+
+    def acid_unread(self) -> list[sqlite3.Row]:
+        """The copy that counts of every listed WAV loop whose acid chunk hasn't been looked at."""
+        return self.q("SELECT s.rel, s.audio FROM listed l JOIN sample s ON s.audio = l.audio AND s.rel = l.rel "
+                      "LEFT JOIN tempo_key t ON t.audio = l.audio WHERE l.loop = 1 AND s.container = 'WAV' "
+                      "AND COALESCE(t.acid_read, 0) = 0")
+
+    # ------------------------------------------------------------------ tags.json (8.6)
+    def export_user_tags(self) -> dict:
+        tags: dict = {}
+        for r in self.q("SELECT audio, tag, state FROM tag ORDER BY audio, tag"):
+            tags.setdefault(r["audio"], {"yes": [], "no": []})[r["state"]].append(r["tag"])
+        tempo = {}
+        for r in self.q("SELECT audio, bpm, key FROM tempo_key WHERE bpm IS NOT NULL OR key IS NOT NULL"):
+            tempo[r["audio"]] = {k: r[k] for k in ("bpm", "key") if r[k] is not None}
+        return {"tags": tags, "tempo": tempo}
+
+    def import_user_tags(self, d: dict):
+        """Make the tag table and the typed BPM/key what tags.json says (it is the copy that outlives the PC)."""
+        with self.lock:
+            self.con.execute("DELETE FROM tag")
+            for a, v in (d.get("tags") or {}).items():
+                for state in ("yes", "no"):
+                    for t in v.get(state, []):
+                        self.con.execute("INSERT OR REPLACE INTO tag (audio, tag, state) VALUES (?,?,?)", (a, t, state))
+            self.con.execute("UPDATE tempo_key SET bpm = NULL, key = NULL")
+            for a, v in (d.get("tempo") or {}).items():
+                self.con.execute("INSERT OR IGNORE INTO tempo_key (audio) VALUES (?)", (a,))
+                self.con.execute("UPDATE tempo_key SET bpm = ?, key = ? WHERE audio = ?", (v.get("bpm"), v.get("key"), a))
+            self.con.commit()
 
     def all_rels(self) -> list[str]:
         return [r[0] for r in self.q("SELECT rel FROM sample")]

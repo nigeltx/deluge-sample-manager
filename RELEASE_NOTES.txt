@@ -1,3 +1,31 @@
+Sample Manager. Version 0.13.0 — tags, BPM and key, search filters and smart lists you save.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+Tags
+- Type a tag in the details pane (Tags box, Enter); click a tag to take it off. Tags belong to the sound, so every
+  copy has them. For many samples at once: select them, right-click › Tags….
+- Tags guessed from pack and folder names (a pack called "Psychill …" → psychill) show grey with a "?". Click one to
+  confirm it or take it off, or right-click a pack under SOURCES › Confirm guessed tags. Guesses don't count in
+  searches until confirmed. The words that make guesses are in Settings › Tag words….
+- A Tags column in the list.
+
+BPM and key
+- BPM and Key columns, and boxes in the details pane. They come from what you type, then the file's own tempo
+  (its acid chunk), then the file or folder name (145bpm, Bass Loop 145 F#m, Key of D). Flats are shown as
+  sharps: Gbm is F#m. Clear a box to go back to the guess.
+- A file's own tempo is read when it is added to the library or first played. Library ▾ › Read tempos from loop
+  files… reads it for all your loops at once.
+
+Search
+- Filters: type:kick  type:hat  loop  -loop  tag:dark  bpm:140-150  key:F#m  len:<1s  on:syntakt  -on:any
+  src:paid  pack:"dark mass"  dupe  wontplay  untagged. All words must match; a minus turns one round.
+  The ? button beside the search box lists them.
+- The search works in the list you're looking at; select LIBRARY to search everything.
+- Save as smart list… keeps a search under SMART LISTS, with a count. Right-click it to rename, change or delete it.
+- Your tags, typed BPM/key and smart lists are saved in the library's _Sample Manager folder (tags.json,
+  smart-lists.json), so they're kept on Drive.
+
 Sample Manager. Version 0.12.1 — send any sample to the Syntakt, choosing a slot to replace.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

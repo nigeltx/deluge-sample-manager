@@ -2,7 +2,7 @@
 
 Windows GUI app (Python 3.12 + PySide6): one sample library (Studio\\Samples) for every device — for now the
 Synthstrom Deluge and the Elektron Syntakt. Called Deluge Sample Manager before 0.9 (the Python package is still `dsm`).
-The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_v2.x.pdf (latest).
+The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_v2.x.pdf (latest, v2.4).
 
 The owner (Nigel) does not code or debug. Keep the code easy for Claude to change:
 plain modules, tests for every core behaviour, no clever metaprogramming.
@@ -34,6 +34,12 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   a slot the user picks to replace after a warning; Remove any non-factory sample after a warning (record _Sample Manager/syntakt.json), backups to Backups › Syntakt, journal + Undo. `ui/syntakt_ui.py` the
   window side (a mixin of MainWindow). `tests/fake_syntakt.py` answers like the real one (refuses a footer sent with the audio).
   Syntakt changes don't use the pending tray: each asks first, backs up, reads back. The Syntakt needs a restart to use new samples.
+- `dsm/library/tags.py`, `tempokey.py`, `search.py` — 0.13 (spec v2.4 section 8): tags by audio identity (db table tag:
+  yes / no for a guess taken off; guesses from pack/folder names against the vocabulary), BPM and key (typed → acid
+  chunk → name → folder; db table tempo_key), the search filters and saved smart lists. Synced copies in the library:
+  _Sample Manager/tags.json (the copy that counts, read into the db at each scan) and smart-lists.json.
+  `ui/tags_ui.py` the window side (a mixin, like syntakt_ui); `ui/tag_widgets.py` TagBox, Tags… dialog, help.
+  Library-wide search uses a cache of every listed sample's search context (_all_library), warmed after each scan.
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
 - `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE and › SYNTAKT (samples on each device by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass

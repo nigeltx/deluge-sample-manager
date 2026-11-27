@@ -37,6 +37,7 @@ from dsm.ui.health_dialog import HealthDialog
 from dsm.ui.import_dialog import ImportDialog
 from dsm.ui.library_dialogs import AlertsDialog, GetDialog, ReorganizeDialog
 from dsm.ui.syntakt_ui import SyntaktMixin
+from dsm.ui.tags_ui import TagsMixin
 from dsm.ui.type_dialog import TypeDialog
 from dsm.ui.widgets import Job, Waveform, run_job
 
@@ -64,7 +65,7 @@ def human_size(n: int) -> str:
     return f"{n:.1f} PB"
 
 
-class MainWindow(SyntaktMixin, QMainWindow):
+class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
@@ -89,6 +90,7 @@ class MainWindow(SyntaktMixin, QMainWindow):
         self.pack_by_audio: dict[str, str] = {}   # audio identity → its pack in the library
         self._offered_reorganize = False
         self._syn_init()
+        self._tags_init()
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1400, 860)
@@ -111,6 +113,9 @@ class MainWindow(SyntaktMixin, QMainWindow):
         sc.setShortcut("Ctrl+R")
         lm.addAction("Reorganize library…", self._open_reorganize)
         lm.addAction("Library changed or missing…", self._open_alerts)
+        lm.addSeparator()
+        lm.addAction("Read tempos from loop files…", self._read_acid_all)
+        lm.addAction("Tag words…", self._vocab_dialog)
         lm.addSeparator()
         lm.addAction("Open the library folder", lambda: open_folder(self.settings["library_root"]))
         lb.setMenu(lm)
@@ -181,11 +186,21 @@ class MainWindow(SyntaktMixin, QMainWindow):
         hb.setMenu(hm); tb.addWidget(hb)
         tb.addSeparator()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search the library — e.g.  kick 808   (or 'unused' for the card)")
+        self.search.setPlaceholderText("Search — e.g.  kick 808   type:bass loop tag:dark bpm:140-150 key:F#m")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(300)
+        self.search.setMinimumWidth(380)
         self.search.returnPressed.connect(self._do_search)
+        self.search.textChanged.connect(lambda t: None if t.strip() else self._search_cleared())
         tb.addWidget(self.search)
+        qb = QPushButton("?")
+        qb.setFixedWidth(26)
+        qb.setToolTip("The search filters")
+        qb.clicked.connect(self._search_help)
+        tb.addWidget(qb)
+        sv = QPushButton("Save as smart list…")
+        sv.setToolTip("Keep this search under SMART LISTS")
+        sv.clicked.connect(self._save_smart_list)
+        tb.addWidget(sv)
         spacer = QWidget()
         spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding, spacer.sizePolicy().verticalPolicy())
         tb.addWidget(spacer)
@@ -234,9 +249,9 @@ class MainWindow(SyntaktMixin, QMainWindow):
         self.warn.setStyleSheet("background:#fbe6d6;color:#7c2d12;padding:6px;border-left:3px solid #9a3412;")
         self.warn.hide()
         ml.addWidget(self.warn)
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 13)
         self.table.setHorizontalHeaderLabels(["Name", "Pack", "Source", "Deluge", "Length", "kHz/bit", "Used", "Plays",
-                                              "Type", "Syntakt"])
+                                              "Type", "Syntakt", "BPM", "Key", "Tags"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -245,13 +260,18 @@ class MainWindow(SyntaktMixin, QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setSortingEnabled(True)
         hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        self.table.setColumnWidth(0, 240)
         hh.setSectionResizeMode(1, QHeaderView.Interactive)
         self.table.setColumnWidth(1, 150)
-        for c in range(2, 10):
+        for c in range(2, 12):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(12, QHeaderView.Interactive)
+        self.table.setColumnWidth(12, 150)
         hh.moveSection(8, 1)                    # Type shows next to Name
         hh.moveSection(9, 5)                    # Syntakt after Deluge
+        for k, col in enumerate((10, 11, 12)):  # BPM, Key, Tags after Syntakt (0.13)
+            hh.moveSection(hh.visualIndex(col), 6 + k)
         self.table.currentCellChanged.connect(lambda r, *_: self._row_select(r))
         self.table.installEventFilter(self)
         ml.addWidget(self.table, 1)
@@ -310,6 +330,7 @@ class MainWindow(SyntaktMixin, QMainWindow):
         self.f_type = QLabel()
         self.f_type.setWordWrap(True)
         form.addRow("Type", self.f_type)
+        self._build_tag_rows(form)
         self.f_link = QLabel()
         self.f_link.setWordWrap(True)
         self.f_link.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -634,9 +655,10 @@ class MainWindow(SyntaktMixin, QMainWindow):
                 it.setData(0, Qt.UserRole, ("smart", name))
                 it.setToolTip(0, tip)
                 hdr.addChild(it)
+        self._saved_tree(hdr)
         hdr.setExpanded(True)
         self.tree.blockSignals(False)
-        if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot"):
+        if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot", "saved"):
             it = self._find_tree_item(sel)
             if it:
                 self.tree.setCurrentItem(it)
@@ -653,6 +675,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
         else:
             self.libdb.clear_user_type(audios)
         self._save_types()
+        self._rows_gen += 1
+        self._data_gen += 1
         self.status_lbl.setText(f"Type updated for {len(audios):,} sample{'s' if len(audios) != 1 else ''}")
         self._loop_filter_changed()
 
@@ -696,6 +720,7 @@ class MainWindow(SyntaktMixin, QMainWindow):
         self._lib_scanning = True
         db = self.libdb
         self._load_types()
+        self._tags_load()
 
         def work(progress):
             return scan_library(db, root, progress=progress)
@@ -703,6 +728,9 @@ class MainWindow(SyntaktMixin, QMainWindow):
         def done(r):
             self._lib_scanning = False
             self.prog.hide()
+            self._rows_gen += 1
+            self._tags_reload()
+            QTimer.singleShot(500, self._warm_search)
             self._refresh_devices()
             self._build_library_root()
             bits = [f"Library: {r.get('seen', 0):,} files", f"{r.get('read', 0):,} samples read",
@@ -720,6 +748,10 @@ class MainWindow(SyntaktMixin, QMainWindow):
         run_job(Job(work, wants_progress=True), done=done, failed=failed, progress=self._progress)
 
     def _list_library(self, rows_db, title, show_path=True):
+        self._fill_rows(self._lib_rows(rows_db), title)
+
+    def _lib_rows(self, rows_db) -> list[dict]:
+        """Rows for the list from library db rows."""
         root = self.settings["library_root"]
         rows = []
         for r in rows_db:
@@ -728,8 +760,9 @@ class MainWindow(SyntaktMixin, QMainWindow):
                          "name": label, "file_name": r["name"], "pack": bottom_folder(r["rel"]), "info": info_from_row(r, root), "audio": r["audio"],
                          "area": r["area"], "in_zip": lsrc.SEP in r["rel"],
                          "types": stypes.unpack(r["types"]) or [stypes.UNKNOWN], "is_loop": bool(r["is_loop"]),
-                         "type_why": r["type_why"] or "folder in Samples", "type_by_user": bool(r["type_by_user"])})
-        self._fill_rows(rows, title)
+                         "type_why": r["type_why"] or "folder in Samples", "type_by_user": bool(r["type_by_user"]),
+                         "sid": r["sid"]})
+        return rows
 
     def _tree_expand(self, item):
         return
@@ -763,6 +796,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
             self._list_library(self.libdb.query(**q), title)
         elif kind == "alerts":
             self._open_alerts()
+        elif kind == "saved":
+            self._saved_select(val)
         elif kind == "libsmart":
             on = set(self.on_deluge)
             if val == "On the Deluge":
@@ -922,7 +957,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
         labels = getattr(self, "id_labels", {})
         audio = getattr(self, "card_audio", {})
         rows = [{"where": "card", "rel": r, "abs": self.card.abs(r), "file_name": os.path.basename(r),
-                 "name": labels.get(audio.get(r.lower())) or os.path.basename(r), "pack": bottom_folder(r)}
+                 "name": labels.get(audio.get(r.lower())) or os.path.basename(r), "pack": bottom_folder(r),
+                 "audio": audio.get(r.lower())}
                 for r in rels]
         self._fill_rows(rows, title)
 
@@ -948,8 +984,14 @@ class MainWindow(SyntaktMixin, QMainWindow):
     def _loop_filter_changed(self, _=None):
         cur = self.tree.currentItem()
         kind = (cur.data(0, Qt.UserRole) or (None,))[0] if cur else None
+        q = self.search.text().strip()
         self._build_library_root()              # reselecting a library item lists it again
-        if kind in ("samples", "samplesroot", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot"):
+        if kind in ("samples", "samplesroot", "srcq", "libsmart", "devtype", "devroot", "syntype", "synroot", "saved"):
+            if q:                                # …and the search on it again
+                self.search.blockSignals(True)
+                self.search.setText(q)
+                self.search.blockSignals(False)
+                self._do_search()
             return
         if kind is None and self.search.text().strip():
             self._do_search()
@@ -960,6 +1002,13 @@ class MainWindow(SyntaktMixin, QMainWindow):
         return {0: None, 1: False, 2: True}[self.loop_filter.currentIndex()]
 
     def _fill_rows(self, rows, title):
+        if not self._in_search:                  # the list the search box filters (spec 8.4)
+            self.search_base = (rows, title)
+            if self.search.text().strip():
+                self.search.blockSignals(True)
+                self.search.clear()
+                self.search.setStyleSheet("")
+                self.search.blockSignals(False)
         for r in rows:
             self._row_types(r)
         want = self._loop_wanted()
@@ -1023,6 +1072,7 @@ class MainWindow(SyntaktMixin, QMainWindow):
             si.setForeground(GREEN)
             si.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 9, si)
+            self._fill_tag_cells(i, row)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
@@ -1125,26 +1175,6 @@ class MainWindow(SyntaktMixin, QMainWindow):
         k = it.data(Qt.UserRole)
         return self.rows[k] if isinstance(k, int) and 0 <= k < len(self.rows) else None
 
-    def _do_search(self):
-        q = self.search.text().strip().lower()
-        if not q:
-            return
-        if q != "unused":
-            rows = self.libdb.query(listed=True, text=q, limit=5000)
-            if not rows:
-                rows = self.libdb.query(text=q, limit=5000)
-            self._list_library(rows, f"Search: {q}" + (" (first 5,000)" if len(rows) >= 5000 else ""))
-            return
-        if not self.card:
-            return
-        if q == "unused":
-            if self.index:
-                self._list_card(unused_samples(self.index), "Search: unused", show_dir=True)
-            return
-        words = q.split()
-        hits = [s for s in self.card.sample_files() if all(w in s.lower() for w in words)]
-        self._list_card(hits[:2000], f"Search: {q}" + (" (first 2000)" if len(hits) > 2000 else ""), show_dir=True)
-
     # ------------------------------------------------------------------ inspector
     def _row_select(self, r):
         if r < 0 or not self.table.item(r, 0):
@@ -1189,7 +1219,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
             else:
                 src = card.read_for_playback(rel) if row["where"] == "card" and card.is_usb else path
             data, rate = playback.load(src)
-            return path, data, rate, playback.peaks(data), then_play
+            acid = self._acid_for_current(row, src)
+            return path, data, rate, playback.peaks(data), then_play, acid
         def failed(e):
             if self.current and self.current["abs"] == path:
                 self.wave.set_data(None, message=f"Can't read this file: {e}")
@@ -1202,9 +1233,14 @@ class MainWindow(SyntaktMixin, QMainWindow):
         run_job(Job(work), done=self._audio_loaded, failed=failed)
 
     def _audio_loaded(self, res):
-        path, data, rate, pk, then_play = res
+        path, data, rate, pk, then_play, acid = res
+        if acid:                                 # the file's acid chunk gave a tempo or root note (spec 8.3)
+            self._tags_reload()
+            self._refresh_tag_cells()
         if not self.current or self.current["abs"] != path:
             return
+        if acid:
+            self._show_tags(self.current)
         self.audio = (data, rate)
         info = self.current.get("info")
         loop = (info.loop_start, info.loop_end) if info and info.loop_end else None
@@ -1234,6 +1270,7 @@ class MainWindow(SyntaktMixin, QMainWindow):
             for w in (self.f_format, self.f_rate, self.f_len, self.f_loop, self.problems):
                 w.setText("…")
         self._row_types(row)
+        self._show_tags(row)
         self.f_type.setText(", ".join(stypes.label(t) for t in row["types"]) + (" · loop" if row["is_loop"] else " · one-shot")
                             + ("  (set by you)" if row["type_by_user"] else f"  (guessed from the {row['type_why']})"))
         self.f_link.setText(self._link_text(row))
@@ -1432,6 +1469,10 @@ class MainWindow(SyntaktMixin, QMainWindow):
         brow.addWidget(bpath, 1)
         brow.addWidget(bpick)
         lay.addRow("Backup folder", brow)
+        tw = QPushButton("Tag words…")
+        tw.setToolTip("The words that give guessed tags from pack and folder names")
+        tw.clicked.connect(self._vocab_dialog)
+        lay.addRow("Tags", tw)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
@@ -1498,6 +1539,10 @@ class MainWindow(SyntaktMixin, QMainWindow):
         all_lib = [r for r in lib_rows if r.get("audio")]
         if all_lib:
             acts[m.addAction(f"Set type… ({len(all_lib):,})" if len(all_lib) > 1 else "Set type…")] = "type"
+        tag_rows = [r for r in rows if r and r.get("audio") and r["where"] in ("lib", "syntakt", "card")]
+        if tag_rows:
+            acts[m.addAction(f"Tags… ({len(tag_rows):,})" if len(tag_rows) > 1 else "Tags…")] = "tags"
+        if all_lib or tag_rows:
             m.addSeparator()
         lib_fact = [r for r in lib_rows if r.get("origin") == "Factory"]
         lib_rows = [r for r in lib_rows if r.get("origin") != "Factory"]
@@ -1536,6 +1581,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
             self._syn_send(to_syn)
         elif what == "syn-remove":
             self._syn_remove(syn_rows)
+        if what == "tags":
+            self._tags_dialog(tag_rows)
         if what == "type":
             self._set_type(all_lib)
         elif what == "send":
@@ -1590,9 +1637,20 @@ class MainWindow(SyntaktMixin, QMainWindow):
             return
         if d and d[0] in ("srcq", "sourcesroot"):
             m = QMenu(self)
+            c = m.addAction("Confirm guessed tags") if d[0] == "srcq" else None
             a = m.addAction("🔒 The library's folders are never changed by the app")
             a.setEnabled(False)
-            m.exec(self.tree.viewport().mapToGlobal(pos))
+            if m.exec(self.tree.viewport().mapToGlobal(pos)) is c and c is not None:
+                self._confirm_pack_guesses(dict(d[1]))
+            return
+        if d and d[0] == "saved":
+            self._saved_menu(d, pos)
+            return
+        if d and d[0] == "libsmarthdr":
+            m = QMenu(self)
+            a = m.addAction("New smart list from the search…")
+            if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
+                self._save_smart_list()
             return
         if not d or d[0] != "samples":
             return

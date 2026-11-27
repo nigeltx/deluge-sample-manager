@@ -23,6 +23,7 @@ import zipfile
 from dsm.audio.inspect import inspect
 from dsm.library import layout
 from dsm.library import sources as src
+from dsm.library import tempokey
 from dsm.library.db import LibraryDB
 
 
@@ -34,7 +35,8 @@ def row_for(rel: str, data: bytes, size: int, mtime: float, file: str) -> dict:
             "header": info.header, "rate": info.rate, "bits": info.bits, "channels": info.channels,
             "frames": info.frames, "loop_start": info.loop_start, "loop_end": info.loop_end,
             "root_note": info.root_note, "plays": int(info.deluge_plays), "native": int(info.native),
-            "problems": "\n".join(info.problems), "error": info.error}
+            "problems": "\n".join(info.problems), "error": info.error,
+            "_acid": tempokey.acid_from_bytes(data) if info.container == "WAV" else (None, None)}
 
 
 def read_source_file(rel: str, full: str) -> tuple[str, list[dict]]:
@@ -94,6 +96,7 @@ def scan(db: LibraryDB, root: str, progress=None) -> dict:
             continue
         db.remove_file(rel)
         db.upsert(rows)
+        db.set_acid([(r["audio"], *r["_acid"]) for r in rows if r.get("audio") and "_acid" in r])
         db.set_source_file(rel, st.st_size, st.st_mtime, sha)
         new_shas[sha] = rel
         out["read"] += len(rows)
