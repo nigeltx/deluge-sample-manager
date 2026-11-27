@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import re
 
-RULES_VERSION = 1
+RULES_VERSION = 2                # 2: Drone added (26 Nov 2026)
 
 # The groups as the left pane shows them. Each type belongs to one group.
 DRUMS = ["Kick", "Snare", "Clap", "Closed hat", "Open hat", "Hat", "Cymbal", "Tom", "Percussion", "Other drums"]
-MUSIC = ["Bass", "Synth", "Keys", "Pad", "Vocal", "FX", "Instrument"]
+MUSIC = ["Bass", "Synth", "Keys", "Pad", "Drone", "Vocal", "FX", "Instrument"]
 ALL_TYPES = DRUMS + MUSIC
 UNKNOWN = "Unknown"
 LABELS = {"Hat": "Hats, open or closed?"}       # how a type is shown when its name alone is unclear
@@ -40,7 +40,8 @@ RULES = [
     ("Bass", r"bass(es)?|basslines?|sub ?bass|subs?|808s?|reese"),
     ("Synth", r"synths?|leads?|plucks?|arps?|arpeggios?|stabs?|chords?|seqs?|sequences?|saws?|hoovers?"),
     ("Keys", r"pianos?|keys|rhodes|organs?|e ?pianos?|wurli(tzer)?|clavs?"),
-    ("Pad", r"pads?|drones?|atmos|atmospheres?|atmospherics?|atomspheric|ambien(ce|t)s?|ambiances?|textures?|"
+    ("Drone", r"drones?|droning|drone ?pads?"),
+    ("Pad", r"pads?|atmos|atmospheres?|atmospherics?|atomspheric|ambien(ce|t)s?|ambiances?|textures?|"
             r"soundscapes?|grains?|granular|granulations?"),
     ("Vocal", r"vocals?|vox|voices?|chants?|choirs?|acapellas?|vocal ?chops?"),
     ("FX", r"fx|sfx|risers?|impacts?|sweeps?|whoosh(es)?|noises?|uplifters?|downlifters?|reverses?|"

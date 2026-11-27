@@ -1,3 +1,14 @@
+Sample Manager. Version 0.9.2 — a Drone type.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+- New type: Drone, listed after Pad. A sample whose name, or nearest folder, says drone is a Drone
+  (before, drones were counted as Pads). Set type… has a Drone box.
+- The first start after updating works out every guess again; types you set by hand are kept.
+- Drones sent to the Deluge now go in their own DRONES folder on the card instead of PADS.
+  Samples already on the card stay where they are.
+
 Sample Manager. Version 0.9.1 — one library folder, no copies.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

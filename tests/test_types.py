@@ -54,3 +54,12 @@ def test_db_types_and_user_override(tmp_path):
     assert db.query(stype="Snare")[0]["name"] == "Kick 1.wav"   # … but the user's choice stays
     db.clear_user_type([k])
     assert db.types_for(k, k) == (["Kick"], False)
+
+
+def test_drone_type():
+    from dsm.importer.naming import classify
+    assert g("Paid/ModeAudio - Eclipse [WAV]/Atomspheric Drones/Following_Drone.wav") == (["Drone"], False)
+    assert g("Paid/ModeAudio - Eclipse [WAV]/Dark Drones/Untitled 3.wav") == (["Drone"], False)    # from the folder
+    assert g("Paid/V/P/Dark Pad 01.wav") == (["Pad"], False)
+    assert "Drone" in st.MUSIC
+    assert classify(["Following_Drone.wav"]) == ("DRONES", "")
