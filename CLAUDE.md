@@ -40,6 +40,9 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   _Sample Manager/tags.json (the copy that counts, read into the db at each scan) and smart-lists.json.
   `ui/tags_ui.py` the window side (a mixin, like syntakt_ui); `ui/tag_widgets.py` TagBox, Tags… dialog, help.
   Library-wide search uses a cache of every listed sample's search context (_all_library), warmed after each scan.
+- Card layout (0.14, Nigel: "mirror TARGETS › DELUGE"): SAMPLES/DRUMS/<KICK|SNARE|…|OTHER>/ and SAMPLES/<BASS|SYNTH|…|UNKNOWN>/
+  (naming.TYPE_DIRS, card_path(type_folder=…)), file named after the ID; factory stays in SAMPLES/FACTORY. The old
+  SAMPLES/PAID|FREE/<vendor>/<pack>/ layout is moved by `dsm/edit/sortcard.py` (Sort the card by type…, an EditBatch of moves).
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
 - `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE and › SYNTAKT (samples on each device by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass

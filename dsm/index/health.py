@@ -99,18 +99,16 @@ def check(idx: CardIndex, library_files: list[str] | None = None, progress=None)
     if progress:
         progress(len(samples), len(samples), "")
 
-    # layout: anything directly under SAMPLES that isn't a source folder or the Deluge's own
-    known = set(SOURCE_DIRS) | set(DELUGE_OWN_SAMPLE_DIRS)
+    # layout (0.14): samples are sorted by type — SAMPLES/DRUMS/KICK, SAMPLES/BASS … — beside FACTORY and the
+    # Deluge's own folders. Anything else directly under SAMPLES is the old layout or put there by hand.
+    from dsm.importer.naming import TYPE_TOPS
+    known = {"FACTORY", "DSM_TRASH"} | set(DELUGE_OWN_SAMPLE_DIRS) | TYPE_TOPS
     tops = sorted({d.split("/")[1] for d in card.dirs if d.upper().startswith("SAMPLES/") and len(d.split("/")) >= 2})
     loose = [t for t in tops if t.upper() not in known]
-    present = {t.upper() for t in tops}
     if loose:
-        F(Finding("layout", f"{len(loose)} folder{'s' if len(loose) != 1 else ''} outside FREE / FACTORY / PAID",
-                  "These will be sorted into the three source folders in milestone M4 (the factory ones automatically):\n"
-                  + "\n".join(loose), "SAMPLES"))
-    for s in SOURCE_DIRS:
-        if s not in present:
-            F(Finding("layout", f"No SAMPLES/{s} folder yet", "Created when the first sample is filed there.", "SAMPLES"))
+        F(Finding("layout", f"{len(loose)} folder{'s' if len(loose) != 1 else ''} outside the type folders",
+                  "Right-click TARGETS › DELUGE › Sort the card by type… to move their samples into SAMPLES/DRUMS/KICK, "
+                  "SAMPLES/BASS and so on:\n" + "\n".join(loose), "SAMPLES"))
     loose_files = [p for p in samples if p.count("/") == 1]
     if loose_files:
         F(Finding("layout", f"{len(loose_files)} sample{'s' if len(loose_files) != 1 else ''} loose directly in SAMPLES", "\n".join(loose_files[:100]), "SAMPLES"))

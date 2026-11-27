@@ -126,3 +126,28 @@ def test_trash_unused(env):
     assert os.path.exists(card.abs(f"DSM_TRASH/{j.id}/SAMPLES/OLDSTUFF/KICKS/kick_unused.wav"))
     ed.undo(j, card, m)
     assert os.path.exists(card.abs("SAMPLES/OLDSTUFF/KICKS/kick_unused.wav"))
+
+
+def test_sort_card_by_type(env):
+    """0.14: Sort the card by type — samples move to SAMPLES/DRUMS/KICK …, presets follow, factory stays."""
+    from dsm.edit.sortcard import sort_batch
+    card, idx, m, bk = env
+    snare = "SAMPLES/PAID/MARS/808/DRUMS/SNARE/SD_808_01.WAV"
+    types = {KICK: "Kick", snare: "Snare", "SAMPLES/FREE/PACKS/VOL1/PADS/LOOPED_PAD.WAV": "Pad"}
+    types.update({r: "Kick" for r in card.sample_files() if r.upper().startswith(("SAMPLES/CLIPS/", "SAMPLES/RECORD/"))})
+    audio = {KICK.lower(): "a1"}
+    batch, note = sort_batch(card, types, audio, {"a1": "KK0007 BD 808 01"})
+    got = dict(batch.moves)
+    assert got[KICK] == "SAMPLES/DRUMS/KICK/KK0007_BD_808_01.WAV"           # named after its ID
+    assert got[snare] == "SAMPLES/DRUMS/SNARE/SD_808_01.WAV"                # no ID: keeps its name
+    assert got["SAMPLES/FREE/PACKS/VOL1/PADS/LOOPED_PAD.WAV"] == "SAMPLES/PAD/LOOPED_PAD.WAV"
+    assert not any(o.upper().startswith(("SAMPLES/CLIPS/", "SAMPLES/RECORD/")) for o in got)
+    p = ed.plan([batch], idx)
+    missing_before = len(idx.missing)
+    ed.apply(p, [batch], card, m, bk, False)
+    card.scan()
+    idx2 = build_index(card)
+    assert idx2.uses("SAMPLES/DRUMS/KICK/KK0007_BD_808_01.WAV") and len(idx2.missing) == missing_before
+    assert not os.path.isdir(card.abs("SAMPLES/PAID/MARS/808/DRUMS/SNARE"))   # emptied folders removed
+    again, _ = sort_batch(card, {"SAMPLES/DRUMS/KICK/KK0007_BD_808_01.WAV": "Kick"}, {}, {})
+    assert again is None                                                     # in place already

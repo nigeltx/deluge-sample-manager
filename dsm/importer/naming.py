@@ -1,7 +1,9 @@
-"""Where an imported sample goes on the card, and what it is called (spec 2.5, 2.6, 4.3).
+"""Where an imported sample goes on the card, and what it is called (spec 3.6, 6.3).
 
-Card path:  SAMPLES/{SOURCE}/{VENDOR}/{PACK}/{CATEGORY}/{SUB}/{NAME}.WAV
-Factory imports keep their own relative layout under SAMPLES/FACTORY.
+Card path (0.14, as the left pane's TARGETS › DELUGE): SAMPLES/DRUMS/{DRUM TYPE}/{NAME}.WAV for drums,
+SAMPLES/{TYPE}/{NAME}.WAV for the rest — e.g. SAMPLES/DRUMS/KICK/KK0212_BD_DEEP_01.WAV, SAMPLES/BASS/…
+The name is the sample's ID when it has one. Factory samples keep their own layout under SAMPLES/FACTORY (locked).
+Before 0.14 it was SAMPLES/{SOURCE}/{VENDOR}/{PACK}/{CATEGORY}/{SUB}/{NAME}.WAV; Sort the card by type moves old ones.
 """
 from __future__ import annotations
 
@@ -10,6 +12,19 @@ import re
 
 SOURCES = ("FREE", "FACTORY", "PAID")
 MAX_NAME = 40
+
+# The card folder of each type list (layout.TYPE_FOLDERS), below SAMPLES. Drums are grouped as in the left pane.
+TYPE_DIRS = {"Kick": "DRUMS/KICK", "Snare": "DRUMS/SNARE", "Clap": "DRUMS/CLAP", "Closed hat": "DRUMS/CLOSED HAT",
+             "Open hat": "DRUMS/OPEN HAT", "Hat": "DRUMS/HATS", "Cymbal": "DRUMS/CYMBAL", "Tom": "DRUMS/TOM",
+             "Percussion": "DRUMS/PERCUSSION", "Other drums": "DRUMS/OTHER", "Bass": "BASS", "Synth": "SYNTH",
+             "Keys": "KEYS", "Pad": "PAD", "Drone": "DRONE", "Vocal": "VOCAL", "FX": "FX", "Instrument": "INSTRUMENT",
+             "Unknown": "UNKNOWN"}
+TYPE_TOPS = {v.split("/")[0] for v in TYPE_DIRS.values()}        # DRUMS, BASS, SYNTH … directly under SAMPLES
+
+
+def type_dir(type_folder: str | None) -> str:
+    """'Kick' → 'SAMPLES/DRUMS/KICK'; an unknown list → 'SAMPLES/UNKNOWN'."""
+    return "SAMPLES/" + TYPE_DIRS.get(type_folder or "Unknown", "UNKNOWN")
 
 # (category, sub, keywords). Order matters: first match wins; drums are listed in kit order.
 CATEGORY_RULES = [
@@ -114,17 +129,19 @@ def guess_vendor_pack(src: str, library_root: str | None, drop_root: str | None)
 
 
 def card_path(source: str, vendor: str, pack: str, original: str, rel_in_pack: str | None = None,
-              name: str | None = None) -> str:
+              name: str | None = None, type_folder: str | None = None) -> str:
     """Card-relative destination for one file (before clash handling). name: the sample's ID label
-    ("HO0046 Fun Hat"), used for the file name in place of the original's."""
+    ("HO0046 Fun Hat"), used for the file name in place of the original's. type_folder: its type list (Kick …);
+    guessed from its path in the pack when not given."""
     source = source.upper()
     if source == "FACTORY":
         sub = [clean(p) for p in (rel_in_pack or os.path.basename(original)).replace("\\", "/").split("/")[:-1]]
         return "/".join(["SAMPLES", "FACTORY", *sub, card_name(os.path.basename(original))])
-    parts_for_class = [os.path.basename(original)] + list(reversed((rel_in_pack or "").replace("\\", "/").split("/")[:-1]))
-    cat, sub = classify(parts_for_class)
-    segs = ["SAMPLES", source, clean(vendor or "UNKNOWN"), clean(pack or "MISC"), cat] + ([sub] if sub else [])
-    return "/".join(segs + [card_name(name + ".wav" if name else os.path.basename(original))])
+    if not type_folder:
+        from dsm.library import layout, types as stypes
+        where = "/".join(x for x in ("Pack", vendor, pack, (rel_in_pack or "").replace("\\", "/") or os.path.basename(original)) if x)
+        type_folder = layout.type_folder(stypes.guess(where)[0])
+    return type_dir(type_folder) + "/" + card_name(name + ".wav" if name else os.path.basename(original))
 
 
 def unique(path: str, taken) -> str:

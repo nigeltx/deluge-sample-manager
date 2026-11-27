@@ -298,6 +298,11 @@ class LibraryDB:
         from dsm.library import ids
         return {r["audio"]: ids.label(r["code"], r["num"], r["name"]) for r in self.q("SELECT * FROM sid")}
 
+    def folders_by_rel(self) -> dict[str, str]:
+        """{library rel: its type list (Kick …)} for every copy of every listed sample."""
+        return {r["rel"]: r["folder"] for r in self.q("SELECT s.rel, l.folder FROM sample s JOIN listed l "
+                                                       "ON l.audio = s.audio")}
+
     def labels_by_rel(self) -> dict[str, str]:
         """{library rel: ID label} for every copy of every sample with an ID."""
         from dsm.library import ids

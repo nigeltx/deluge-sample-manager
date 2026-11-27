@@ -23,8 +23,11 @@ def test_naming():
     assert classify(["thing.wav", "Claps"]) == ("DRUMS", "SNARE-CLAP-RIM")
     assert classify(["Dark Pad 01.wav"]) == ("PADS", "")
     assert classify(["weird.wav"]) == ("OTHER", "")
-    assert card_path("PAID", "Samples From Mars", "808 From Mars", "/x/BD 01.wav") == \
-        "SAMPLES/PAID/SAMPLES FROM MARS/808 FROM MARS/DRUMS/KICK/BD_01.WAV"
+    assert card_path("PAID", "Samples From Mars", "808 From Mars", "/x/BD 01.wav") == "SAMPLES/DRUMS/KICK/BD_01.WAV"
+    assert card_path("PAID", "V", "P", "/x/Thing.wav", "Basses/Thing.wav") == "SAMPLES/BASS/THING.WAV"
+    assert card_path("PAID", "V", "P", "/x/a.wav", name="HO0046 Fun Hat", type_folder="Open hat") == \
+        "SAMPLES/DRUMS/OPEN HAT/HO0046_FUN_HAT.WAV"
+    assert card_path("FREE", "V", "P", "/x/zzz.wav") == "SAMPLES/UNKNOWN/ZZZ.WAV"
     assert card_path("FACTORY", "", "", "/x/Kick.wav", "DRUMS/Kick.wav") == "SAMPLES/FACTORY/DRUMS/KICK.WAV"
 
 
@@ -94,7 +97,7 @@ def test_plan_apply_undo(env):
     f1 = os.path.join(lib, "PAID", "Mars", "Psy Kicks", "Kicks", "Roll Kick F#m 145.wav")
     b1 = build_plan([(f1, None)], "PAID", "Mars", "Psy Kicks", Profile(), card, lib, m)
     i1 = b1.items[0]
-    assert i1.card_rel == "SAMPLES/PAID/MARS/PSY KICKS/DRUMS/KICK/ROLL_KICK_145_F#M.WAV"
+    assert i1.card_rel == "SAMPLES/DRUMS/KICK/ROLL_KICK_145_F#M.WAV"
     assert not i1.copy_original and i1.library_rel == "PAID/Mars/Psy Kicks/Kicks/Roll Kick F#m 145.wav"
     assert "resampled 48 → 44.1 kHz" in i1.note
     # from Downloads: original copied into the library

@@ -1,3 +1,20 @@
+Sample Manager. Version 0.14.0 — the card sorted by type, like TARGETS › DELUGE.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Samples sent to the card now go into the folder of their type, as the left pane lists them:
+  SAMPLES/DRUMS/KICK, SAMPLES/DRUMS/SNARE … SAMPLES/DRUMS/OTHER, then SAMPLES/BASS, SYNTH, KEYS, PAD, DRONE,
+  VOCAL, FX, INSTRUMENT and UNKNOWN — named after their IDs (SAMPLES/DRUMS/KICK/KK0212_BD_DEEP_01.WAV).
+  Before, they went to SAMPLES/PAID/<vendor>/<pack>/….
+- Right-click TARGETS › DELUGE › Sort the card by type… moves the samples already on the card into those folders
+  (or right-click one type, such as Kick, to sort only that). Samples with an ID are renamed to it on the way.
+  Every kit, synth and song that uses them is updated, and the folders left empty are removed. It goes into the
+  pending tray: nothing changes until you press Apply, and History can undo it.
+- Factory samples stay locked in SAMPLES/FACTORY; CLIPS, RECORD, RESAMPLE and EXPORTS stay where the Deluge keeps
+  them.
+- The health check now lists folders outside the type folders (the old PAID and FREE ones) instead of asking for
+  PAID and FREE.
+
 Sample Manager. Version 0.13.1 — fixes the freeze when clicking a sample.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

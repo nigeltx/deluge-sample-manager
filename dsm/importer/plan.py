@@ -78,8 +78,9 @@ def library_rel_for(src: str, drop_root: str | None, library_root: str | None, s
 
 def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pack: str, profile: Profile,
                card: Card, library_root: str | None, mapping: Mapping, taken_extra=(), infos=None,
-               aliases=None, names=None) -> ImportBatch:
-    """names: {library rel: ID label} — a sample with an ID goes on the card named after it (0.11)."""
+               aliases=None, names=None, types=None) -> ImportBatch:
+    """names: {library rel: ID label} — a sample with an ID goes on the card named after it (0.11).
+    types: {library rel: type list} — it goes into that type's folder on the card (0.14); else the type is guessed."""
     b = ImportBatch(source=source.upper(), vendor=vendor, pack=pack, profile=profile)
     taken = set(card.files) | {t.lower() for t in taken_extra}
     for src, drop_root in files:
@@ -91,7 +92,8 @@ def build_plan(files: list[tuple[str, str | None]], source: str, vendor: str, pa
             parts = lib_rel.replace("::", "/").split("/")
             skip = 3                                                   # Paid/vendor/pack/…
             in_pack = "/".join(parts[skip:]) if len(parts) > skip else parts[-1]
-        dest = card_path(b.source, vendor, pack, src, in_pack, name=(names or {}).get(lib_rel))
+        dest = card_path(b.source, vendor, pack, src, in_pack, name=(names or {}).get(lib_rel),
+                         type_folder=(types or {}).get(lib_rel))
         item = ImportItem(src=src, card_rel=dest, library_rel=lib_rel, copy_original=copy, info=info)
         if b.source == "FACTORY":
             item.skip = "factory samples are locked — they come from Initialize Factory Samples"

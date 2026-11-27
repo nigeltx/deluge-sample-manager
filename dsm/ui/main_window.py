@@ -1154,7 +1154,10 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
 
     def _origin(self, row) -> str:
         if row["where"] == "card":
-            return factory.origin(row["rel"], on_card=True)
+            o = factory.origin(row["rel"], on_card=True)
+            if o == "Other" and row.get("audio") in self.origin_by_audio:    # sorted by type: ask the library
+                o = self.origin_by_audio[row["audio"]]
+            return o
         rel = row.get("librel", "")
         if row["where"] == "syntakt" and not rel:
             return "Syntakt"
@@ -1624,11 +1627,17 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
             return
         if d and d[0] in ("devroot", "devtype") and self.card and self.index:
             m = QMenu(self)
+            srt = m.addAction("Sort the card by type…")
+            srt.setToolTip("Move samples into SAMPLES/DRUMS/KICK, SAMPLES/BASS … as listed here; every kit, synth and "
+                           "song is updated")
             a = m.addAction("Rename samples to their IDs…")
             a.setToolTip("e.g. HO0046_FUN_HAT.WAV; every kit, synth and song is updated")
-            if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
-                folders = None if d[0] == "devroot" else (set(layout.DRUM_FOLDERS) if d[1] == "Drums" else {d[1]})
+            got = m.exec(self.tree.viewport().mapToGlobal(pos))
+            folders = None if d[0] == "devroot" else (set(layout.DRUM_FOLDERS) if d[1] == "Drums" else {d[1]})
+            if got is a:
                 self._rename_to_ids(folders)
+            elif got is srt:
+                self._sort_card(folders)
             return
         if d and d[0] in ("synroot", "syntype"):
             self._syn_tree_menu(d, pos)
@@ -1659,6 +1668,27 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         a.setEnabled(bool(todo) and self.card is not None)
         if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
             self._send_lib([r["rel"] for r in todo])
+
+    def _sort_card(self, folders=None):
+        """0.14: move card samples into the folders of their types (SAMPLES/DRUMS/KICK …) through the pending tray."""
+        from dsm.edit.sortcard import sort_batch
+        types = {r: f for r, f in self.card_types.items() if folders is None or f in folders}
+        batch, note = sort_batch(self.card, types, self.card_audio, self.id_labels)
+        if not batch:
+            QMessageBox.information(self, APP_NAME, "Nothing to move: " + (note or "every sample is in place."))
+            return
+        by_dir = {}
+        for _o, n in batch.moves:
+            d = n.rsplit("/", 1)[0]
+            by_dir[d] = by_dir.get(d, 0) + 1
+        lines = "\n".join(f"{d}   ({n:,})" for d, n in sorted(by_dir.items()))
+        msg = (f"Move {len(batch.moves):,} sample{'s' if len(batch.moves) != 1 else ''} into the folders of their "
+               f"types, as TARGETS › DELUGE shows them:\n\n{lines}\n\nSamples with an ID are named after it "
+               "(HO0046_FUN_HAT.WAV). Every kit, synth and song that uses them is updated, and folders left empty are "
+               "removed. Factory samples stay in SAMPLES/FACTORY. The change goes to the pending tray; nothing "
+               "happens until you press Apply, and History can undo it." + (f"\n\n{note}" if note else ""))
+        if QMessageBox.question(self, APP_NAME, msg) == QMessageBox.Yes:
+            self._add_edit(batch)
 
     def _rename_to_ids(self, folders=None):
         """0.11: rename card samples to their library IDs (HO0046_FUN_HAT.WAV) through the pending tray."""
@@ -2034,7 +2064,8 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
             dests = [i.card_rel for b in self.pending if getattr(b, "kind", "import") != "edit" for i in b.active]
             dests += [n for b in self.pending if getattr(b, "kind", "") == "edit" for _, n in b.moves]
             dlg = ImportDialog(files, infos, self.card, self.settings["library_root"], self.mapping, dests, self,
-                               aliases=aliases, names=self.libdb.labels_by_rel())
+                               aliases=aliases, names=self.libdb.labels_by_rel(),
+                               types=self.libdb.folders_by_rel())
             if dlg.exec() and dlg.batch and dlg.batch.active:
                 self.pending.append(dlg.batch)
                 self._update_tray()
