@@ -559,7 +559,7 @@ class MainWindow(QMainWindow):
         top.setToolTip(0, "Every sample in the library once, by type — a view, nothing is copied.\n"
                           "Right-click a sample → Set type… to move it to another list.")
         self.tree.insertTopLevelItem(0, self._bold(top))
-        self._type_branch(top, tcounts, "samples", on)
+        self._type_branch(top, tcounts, "samples")
         top.setExpanded(True)
         total = sum(v for k, v in counts.items() if len(k) == 2)
         srcs = QTreeWidgetItem([f"SOURCES 🔒  ({total:,})"])
@@ -598,12 +598,8 @@ class MainWindow(QMainWindow):
             dv = QTreeWidgetItem([f"DELUGE  ({sum(ctypes.values()):,} on the card · {self.card.facts.label or self.card.root})"])
             dv.setData(0, Qt.UserRole, ("devroot", "deluge"))
             dv.setToolTip(0, "Samples on the Deluge's card, by type. Right-click for Rename samples to their IDs…")
-            tg.addChild(self._bold(dv, GREEN))
+            tg.addChild(self._bold(dv))
             self._type_branch(dv, ctypes, "devtype")
-            for name in ("Unused on card", "Won't play on the Deluge", "Duplicates on card"):
-                si = QTreeWidgetItem([f"★ {name}"])
-                si.setData(0, Qt.UserRole, ("smart", name))
-                dv.addChild(si)
             dv.setExpanded(True)
         else:
             dv = QTreeWidgetItem(["DELUGE  (no card open)"])
@@ -622,9 +618,15 @@ class MainWindow(QMainWindow):
                         ("Duplicates in the library", len(dups))):
             it = QTreeWidgetItem([f"★ {name}  ({n:,})"])
             it.setData(0, Qt.UserRole, ("libsmart", name))
-            if name == "On the Deluge":
-                it.setForeground(0, GREEN)
             hdr.addChild(it)
+        if self.card:                            # lists of the card's own files (0.11.1: moved here from DELUGE)
+            for name, tip in (("Unused on the card", "Card samples no kit, synth or song uses"),
+                              ("Won't play on the card", "Card files the Deluge can't play (from the health check)"),
+                              ("Duplicates on the card", "The same sound in more than one card file — tidy them")):
+                it = QTreeWidgetItem([f"★ {name}"])
+                it.setData(0, Qt.UserRole, ("smart", name))
+                it.setToolTip(0, tip)
+                hdr.addChild(it)
         hdr.setExpanded(True)
         self.tree.blockSignals(False)
         if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot"):
