@@ -25,7 +25,10 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - `dsm/updater.py` — self-update from GitHub releases (same file as the Patch Manager's; repo nigeltx/sample-manager must be public;
   renamed from deluge-sample-manager on 26 Nov 2026 — GitHub redirects the old name, which 0.8.1 still uses).
   The workflow also publishes the installer as DelugeSampleManager-Setup-x.exe so 0.8.1 can update across the rename
-- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = SAMPLES by type, FOLDERS (Factory / Paid / Free / User → pack), ON THE DELUGE (card folders), SMART LISTS; middle = sample list (green bold = on the card); right = details
+- `dsm/library/ids.py` — sample IDs (0.11): type code + number + name, e.g. "HO0046 Fun Hat"; one per sound (audio identity),
+  numbers per code never reused (db tables sid, sid_last; db.assign_ids runs at the end of refresh_view); a type change gives a new ID
+- `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
+- `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE (samples on the card by type + card smart lists; no card folder tree since 0.11), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
 - `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer and
   publishes a GitHub release on every push to main

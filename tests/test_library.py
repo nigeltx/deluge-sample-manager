@@ -121,7 +121,7 @@ def test_every_sample_once_by_type(tmp_path):
 
 
 def test_type_folder():
-    assert layout.type_folder(["Hat"]) == "Other drums"
+    assert layout.type_folder(["Hat"]) == "Hat"
     assert layout.type_folder(["Kick", "Snare"]) == "Kick"
     assert layout.type_folder([]) == "Unknown"
 

@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS user_type (
 CREATE TABLE IF NOT EXISTS listed (audio TEXT PRIMARY KEY, rel TEXT, folder TEXT, loop INTEGER);
 CREATE INDEX IF NOT EXISTS listed_folder ON listed(folder);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+-- sample IDs (ids.py): one per sound, by audio identity; sid_last keeps the highest number ever given per type code
+CREATE TABLE IF NOT EXISTS sid (audio TEXT PRIMARY KEY, code TEXT, num INTEGER, name TEXT);
+CREATE TABLE IF NOT EXISTS sid_last (code TEXT PRIMARY KEY, last INTEGER);
 """
 
 SCHEMA_VERSION = "2"
@@ -56,9 +59,11 @@ SOURCE_ORDER = {"Factory": 0, "Paid": 1, "Free": 2, "User": 3}
 
 # a Sources row's types: the user's (by audio) or the guess (by rel). A Samples row's type is its folder.
 SELECT = """SELECT s.*, COALESCE(u.types, g.types) AS types, COALESCE(u.loop, g.loop) AS is_loop,
-  g.why AS type_why, (u.audio IS NOT NULL) AS type_by_user, l.folder AS listed_folder
+  g.why AS type_why, (u.audio IS NOT NULL) AS type_by_user, l.folder AS listed_folder,
+  i.code AS sid_code, i.num AS sid_num, i.name AS sid_name,
+  CASE WHEN i.code IS NULL THEN NULL ELSE i.code || substr('0000' || i.num, -4, 4) END AS sid
 FROM sample s LEFT JOIN stype g ON g.rel = s.rel LEFT JOIN user_type u ON u.audio = s.audio
-LEFT JOIN listed l ON l.audio = s.audio AND l.rel = s.rel"""
+LEFT JOIN listed l ON l.audio = s.audio AND l.rel = s.rel LEFT JOIN sid i ON i.audio = s.audio"""
 
 COLS = ["rel", "area", "source", "level1", "level2", "name", "file", "audio", "size", "mtime", "container", "header",
         "rate", "bits", "channels", "frames", "loop_start", "loop_end", "root_note", "plays", "native", "problems",
@@ -185,8 +190,8 @@ class LibraryDB:
                 sql += f" AND s.{col} = ?"
                 args.append(val)
         for w in text.lower().split():
-            sql += " AND lower(s.rel) LIKE ?"
-            args.append(f"%{w}%")
+            sql += " AND (lower(s.rel) LIKE ? OR lower(COALESCE(s.sid, '')) = ?)"
+            args += [f"%{w}%", w]
         if wont_play:
             sql += " AND (s.plays = 0 OR s.error IS NOT NULL)"
         if stype:
@@ -250,7 +255,45 @@ class LibraryDB:
             self.con.execute("DELETE FROM listed")
             self.con.executemany("INSERT INTO listed (audio, rel, folder, loop) VALUES (?,?,?,?)", rows)
             self.con.commit()
+        self.assign_ids()
         return len(rows)
+
+    def assign_ids(self) -> int:
+        """Give every sample in the listed view an ID (ids.py), and a new one when its type code changed.
+        Numbers are handed out in a fixed order (type, then path) and never reused. Returns how many were new."""
+        from dsm.library import ids
+        with self.lock:
+            have = {r["audio"]: (r["code"], r["num"], r["name"]) for r in self.con.execute("SELECT * FROM sid")}
+            last = {r["code"]: r["last"] for r in self.con.execute("SELECT * FROM sid_last")}
+            todo = []
+            for r in self.con.execute("SELECT l.audio, l.rel, COALESCE(u.types, g.types) AS types FROM listed l "
+                                      "LEFT JOIN stype g ON g.rel = l.rel LEFT JOIN user_type u ON u.audio = l.audio"):
+                code = ids.code_for(stypes.unpack(r["types"]) or [stypes.UNKNOWN])
+                name = ids.tidy_name(r["rel"].split("::")[-1])
+                old = have.get(r["audio"])
+                if old and old[0] == code:
+                    if old[2] != name:
+                        self.con.execute("UPDATE sid SET name = ? WHERE audio = ?", (name, r["audio"]))
+                    continue
+                todo.append((code, r["rel"].lower(), r["audio"], name))
+            for code, _rel, audio, name in sorted(todo):
+                last[code] = last.get(code, 0) + 1
+                self.con.execute("INSERT OR REPLACE INTO sid (audio, code, num, name) VALUES (?,?,?,?)",
+                                 (audio, code, last[code], name))
+            self.con.executemany("INSERT OR REPLACE INTO sid_last (code, last) VALUES (?,?)", list(last.items()))
+            self.con.commit()
+        return len(todo)
+
+    def id_labels(self) -> dict[str, str]:
+        """{audio: 'HO0046 Fun Hat'} for every sample with an ID."""
+        from dsm.library import ids
+        return {r["audio"]: ids.label(r["code"], r["num"], r["name"]) for r in self.q("SELECT * FROM sid")}
+
+    def labels_by_rel(self) -> dict[str, str]:
+        """{library rel: ID label} for every copy of every sample with an ID."""
+        from dsm.library import ids
+        return {r["rel"]: ids.label(r["code"], r["num"], r["name"])
+                for r in self.q("SELECT s.rel, i.code, i.num, i.name FROM sample s JOIN sid i ON i.audio = s.audio")}
 
     def flatten_paths(self) -> int:
         """After Reorganize moves Sources\\* up a level (0.9.0 → 0.9.1): drop the "Sources/" prefix everywhere and

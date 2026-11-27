@@ -46,6 +46,15 @@ USB = "usb"
 USB_AUTOLOAD = 400_000        # over USB, samples up to this size load as soon as they are selected
 
 
+def bottom_folder(rel: str) -> str:
+    """The folder a sample is in, alone: 'Paid/X.zip::Eclipse/Atomspheric Drones/A.wav' → 'Atomspheric Drones'."""
+    parts = rel.replace("::", "/").split("/")[:-1]
+    if not parts:
+        return ""
+    last = parts[-1]
+    return os.path.splitext(last)[0] if last.lower().endswith(".zip") else last
+
+
 def human_size(n: int) -> str:
     for u in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -236,7 +245,7 @@ class MainWindow(QMainWindow):
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table.setColumnWidth(1, 190)
+        self.table.setColumnWidth(1, 150)
         for c in range(2, 9):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hh.moveSection(8, 1)                    # Type shows next to Name
@@ -460,37 +469,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ tree
     def _build_card_tree(self):
-        self.tree.blockSignals(True)
-        for i in range(self.tree.topLevelItemCount()):
-            if self.tree.topLevelItem(i).data(0, Qt.UserRole) == ("cardroot", None):
-                self.tree.takeTopLevelItem(i)
-                break
-        if self.card:
-            root = QTreeWidgetItem([f"ON THE DELUGE  —  {self.card.facts.label or self.card.root}"])
-            root.setData(0, Qt.UserRole, ("cardroot", None))
-            f = root.font(0)
-            f.setBold(True)
-            root.setFont(0, f)
-            root.setForeground(0, GREEN)
-            self.tree.insertTopLevelItem(min(2, self.tree.topLevelItemCount()), root)
-            items = {}
-            for d in sorted(self.card.dirs, key=lambda s: s.lower()):
-                if d.split("/")[0].upper() == "DSM":          # the app's own data folder on the card
-                    continue
-                parent = items.get(d.rsplit("/", 1)[0]) if "/" in d else root
-                it = QTreeWidgetItem([d.rsplit("/", 1)[-1]])
-                it.setData(0, Qt.UserRole, ("card", d))
-                if d.split("/")[0].upper() == "SAMPLES" and d.count("/") == 1 and \
-                        d.split("/")[1].upper() in DELUGE_OWN_SAMPLE_DIRS:
-                    it.setForeground(0, GREY)
-                (parent or root).addChild(it)
-                items[d] = it
-            for name in ("Unused on card", "Won't play on the Deluge", "Duplicates on card"):
-                s = QTreeWidgetItem([f"★ {name}"])
-                s.setData(0, Qt.UserRole, ("smart", name))
-                root.addChild(s)
-            root.setExpanded(False)
-        self.tree.blockSignals(False)
+        """0.11: the card has no folder tree any more; TARGETS › DELUGE (by type) is built with the library."""
+        return
 
     # ------------------------------------------------------------------ the library (spec 2)
     def _refresh_devices(self):
@@ -507,9 +487,42 @@ class MainWindow(QMainWindow):
             for rel, a in self.libdb.audio_of(lib_to_card).items():
                 if a:
                     self.on_deluge[a] = lib_to_card[rel]
+        self.card_audio = {c.lower(): a for a, c in self.on_deluge.items()}
+        self.card_types = {}                     # card sample -> its type list (TARGETS › DELUGE)
+        self.id_labels = self.libdb.id_labels()
+        if self.card:
+            folders = self.libdb.listed_folders()
+            for rel in self.card.sample_files():
+                if rel.upper().startswith("SAMPLES/DSM_TRASH/"):
+                    continue
+                a = self.card_audio.get(rel.lower())
+                self.card_types[rel] = folders.get(a) or layout.type_folder(stypes.guess(rel)[0])
         w = self.libdb.wanted()
         self.origin_by_audio = {a: r["source"] for a, r in w.items()}
         self.pack_by_audio = {a: " › ".join(x for x in (r["level1"], r["level2"]) if x) for a, r in w.items()}
+
+    def _type_branch(self, parent, counts: dict, kind: str, on: dict | None = None):
+        """Drums › Kick … then Bass … Unknown under parent, with counts (and how many are on the Deluge)."""
+        def item(label, n, val):
+            extra = f" · {on[val]:,} on Deluge" if on and on.get(val) else ""
+            it = QTreeWidgetItem([f"{label}  ({n:,}{extra})"])
+            it.setData(0, Qt.UserRole, (kind, val))
+            if on and on.get(val):
+                it.setForeground(0, GREEN)
+            return it
+        n_drums = sum(counts.get(t, 0) for t in layout.DRUM_FOLDERS)
+        if n_drums:
+            if on:
+                on = dict(on, Drums=sum(on.get(t, 0) for t in layout.DRUM_FOLDERS))
+            d = item("Drums", n_drums, "Drums")
+            parent.addChild(d)
+            for t in layout.DRUM_FOLDERS:
+                if counts.get(t):
+                    d.addChild(item(stypes.label(t), counts[t], t))
+            d.setExpanded(True)
+        for t in layout.TYPE_FOLDERS:
+            if t not in layout.DRUM_FOLDERS and counts.get(t):
+                parent.addChild(item(t, counts[t], t))
 
     def _library_on_card(self) -> set[str]:
         return set(self.on_deluge)
@@ -523,11 +536,12 @@ class MainWindow(QMainWindow):
         return it
 
     def _build_library_root(self):
-        """SAMPLES by type (with how many are on the Deluge), SOURCES 🔒 with their packs, SMART LISTS."""
+        """LIBRARY by type, SOURCES 🔒 with their packs, TARGETS › DELUGE by type, SMART LISTS (0.11)."""
         self.tree.blockSignals(True)
         sel = self.tree.currentItem().data(0, Qt.UserRole) if self.tree.currentItem() else None
         for i in reversed(range(self.tree.topLevelItemCount())):
-            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] in ("samplesroot", "sourcesroot", "libsmarthdr"):
+            if self.tree.topLevelItem(i).data(0, Qt.UserRole)[0] in ("samplesroot", "sourcesroot", "targetsroot",
+                                                                      "libsmarthdr", "cardroot"):
                 self.tree.takeTopLevelItem(i)
         root_path = self.settings["library_root"]
         ok = bool(root_path and os.path.isdir(root_path))
@@ -540,24 +554,15 @@ class MainWindow(QMainWindow):
                 if a in self.on_deluge:
                     on[f] = on.get(f, 0) + 1
         n_samples = sum(tcounts.values())
-        top = QTreeWidgetItem([f"SAMPLES  ({n_samples:,})" if ok else "SAMPLES  (library folder not found — Settings)"])
+        top = QTreeWidgetItem([f"LIBRARY  ({n_samples:,})" if ok else "LIBRARY  (library folder not found — Settings)"])
         top.setData(0, Qt.UserRole, ("samplesroot", None))
         top.setToolTip(0, "Every sample in the library once, by type — a view, nothing is copied.\n"
                           "Right-click a sample → Set type… to move it to another list.")
         self.tree.insertTopLevelItem(0, self._bold(top))
-        for t in layout.TYPE_FOLDERS:
-            n = tcounts.get(t, 0)
-            if not n:
-                continue
-            extra = f" · {on[t]:,} on Deluge" if on.get(t) else ""
-            it = QTreeWidgetItem([f"{t}  ({n:,}{extra})"])
-            it.setData(0, Qt.UserRole, ("samples", t))
-            if on.get(t):
-                it.setForeground(0, GREEN)
-            top.addChild(it)
+        self._type_branch(top, tcounts, "samples", on)
         top.setExpanded(True)
         total = sum(v for k, v in counts.items() if len(k) == 2)
-        srcs = QTreeWidgetItem([f"FOLDERS 🔒  ({total:,})"])
+        srcs = QTreeWidgetItem([f"SOURCES 🔒  ({total:,})"])
         srcs.setData(0, Qt.UserRole, ("sourcesroot", None))
         srcs.setToolTip(0, (root_path or "") + "\nYour samples as they came — never changed by the app. Packs in zips "
                         "are read where they are.")
@@ -582,6 +587,30 @@ class MainWindow(QMainWindow):
                     bi = QTreeWidgetItem([f"{b}  ({counts.get((A, st, a, b), 0):,})"])
                     bi.setData(0, Qt.UserRole, ("srcq", {"area": A, "source": st, "level1": a, "level2": b}))
                     ai.addChild(bi)
+        tg = QTreeWidgetItem(["TARGETS"])
+        tg.setData(0, Qt.UserRole, ("targetsroot", None))
+        tg.setToolTip(0, "The devices the samples go to, with what is on each one, by type")
+        self.tree.insertTopLevelItem(2, self._bold(tg))
+        if self.card:
+            ctypes = {}
+            for rel, f in self.card_types.items():
+                ctypes[f] = ctypes.get(f, 0) + 1
+            dv = QTreeWidgetItem([f"DELUGE  ({sum(ctypes.values()):,} on the card · {self.card.facts.label or self.card.root})"])
+            dv.setData(0, Qt.UserRole, ("devroot", "deluge"))
+            dv.setToolTip(0, "Samples on the Deluge's card, by type. Right-click for Rename samples to their IDs…")
+            tg.addChild(self._bold(dv, GREEN))
+            self._type_branch(dv, ctypes, "devtype")
+            for name in ("Unused on card", "Won't play on the Deluge", "Duplicates on card"):
+                si = QTreeWidgetItem([f"★ {name}"])
+                si.setData(0, Qt.UserRole, ("smart", name))
+                dv.addChild(si)
+            dv.setExpanded(True)
+        else:
+            dv = QTreeWidgetItem(["DELUGE  (no card open)"])
+            dv.setData(0, Qt.UserRole, ("devroot", None))
+            dv.setForeground(0, GREY)
+            tg.addChild(dv)
+        tg.setExpanded(True)
         hdr = QTreeWidgetItem(["SMART LISTS"])
         hdr.setData(0, Qt.UserRole, ("libsmarthdr", None))
         self.tree.addTopLevelItem(self._bold(hdr))
@@ -598,7 +627,7 @@ class MainWindow(QMainWindow):
             hdr.addChild(it)
         hdr.setExpanded(True)
         self.tree.blockSignals(False)
-        if sel and sel[0] in ("samples", "srcq", "libsmart"):
+        if sel and sel[0] in ("samples", "srcq", "libsmart", "devtype", "devroot"):
             it = self._find_tree_item(sel)
             if it:
                 self.tree.setCurrentItem(it)
@@ -685,9 +714,9 @@ class MainWindow(QMainWindow):
         root = self.settings["library_root"]
         rows = []
         for r in rows_db:
-            pack = " › ".join(x for x in (r["level1"], r["level2"]) if x)
+            label = f"{r['sid']} {r['sid_name']}" if r["sid"] else r["name"]
             rows.append({"where": "lib", "abs": os.path.join(root, *r["rel"].split("/")), "librel": r["rel"],
-                         "name": r["name"], "pack": pack, "info": info_from_row(r, root), "audio": r["audio"],
+                         "name": label, "file_name": r["name"], "pack": bottom_folder(r["rel"]), "info": info_from_row(r, root), "audio": r["audio"],
                          "area": r["area"], "in_zip": lsrc.SEP in r["rel"],
                          "types": stypes.unpack(r["types"]) or [stypes.UNKNOWN], "is_loop": bool(r["is_loop"]),
                          "type_why": r["type_why"] or "folder in Samples", "type_by_user": bool(r["type_by_user"])})
@@ -703,9 +732,17 @@ class MainWindow(QMainWindow):
         if kind == "card":
             self._list_card([f for f in self._card_files_in(val)], f"{val}")
         elif kind == "samples":
-            self._list_library(self.libdb.query(folder=val), f"Samples › {val}")
+            folders = layout.DRUM_FOLDERS if val == "Drums" else [val]
+            rows = [r for f in folders for r in self.libdb.query(folder=f)]
+            self._list_library(rows, f"Library › {stypes.label(val)}")
         elif kind == "samplesroot":
-            self._list_library(self.libdb.query(listed=True), "Samples")
+            self._list_library(self.libdb.query(listed=True), "Library")
+        elif kind == "devroot" and val and self.card:
+            self._list_card(sorted(self.card_types, key=str.lower), "Deluge")
+        elif kind == "devtype" and self.card:
+            folders = set(layout.DRUM_FOLDERS) if val == "Drums" else {val}
+            self._list_card(sorted((r for r, f in self.card_types.items() if f in folders), key=str.lower),
+                            f"Deluge › {stypes.label(val)}")
         elif kind == "srcq":
             q = dict(val)
             title = " › ".join(["Library"] + [q[k] for k in ("source", "level1", "level2") if q.get(k)])
@@ -845,11 +882,9 @@ class MainWindow(QMainWindow):
     def select_card_path(self, rel: str):
         """Jump the tree to a card folder (or the folder of a file) and select the file."""
         target = rel if rel.lower() in {d.lower() for d in self.card.dirs} else rel.rsplit("/", 1)[0]
-        it = self._find_tree_item(("card", target))
-        if it:
-            self.tree.setCurrentItem(it)
-            self.tree.scrollToItem(it)
-            QTimer.singleShot(300, lambda: self._select_row_by_rel(rel))
+        self.tree.setCurrentItem(None)
+        self._list_card(self._card_files_in(target), target)
+        QTimer.singleShot(300, lambda: self._select_row_by_rel(rel))
 
     def _find_tree_item(self, data):
         stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
@@ -870,8 +905,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ file list
     def _list_card(self, rels, title, show_dir=False):
-        rows = [{"where": "card", "rel": r, "abs": self.card.abs(r), "name": os.path.basename(r),
-                 "pack": r.rsplit("/", 1)[0][len("SAMPLES/"):] if "/" in r[len("SAMPLES/"):] else ""} for r in rels]
+        labels = getattr(self, "id_labels", {})
+        audio = getattr(self, "card_audio", {})
+        rows = [{"where": "card", "rel": r, "abs": self.card.abs(r), "file_name": os.path.basename(r),
+                 "name": labels.get(audio.get(r.lower())) or os.path.basename(r), "pack": bottom_folder(r)}
+                for r in rels]
         self._fill_rows(rows, title)
 
     def _list_lib(self, folder):
@@ -897,7 +935,7 @@ class MainWindow(QMainWindow):
         cur = self.tree.currentItem()
         kind = (cur.data(0, Qt.UserRole) or (None,))[0] if cur else None
         self._build_library_root()              # reselecting a library item lists it again
-        if kind in ("samples", "samplesroot", "srcq", "libsmart"):
+        if kind in ("samples", "samplesroot", "srcq", "libsmart", "devtype", "devroot"):
             return
         if kind is None and self.search.text().strip():
             self._do_search()
@@ -1489,6 +1527,14 @@ class MainWindow(QMainWindow):
             elif got is mov:
                 self._move_folder(d[1])
             return
+        if d and d[0] in ("devroot", "devtype") and self.card and self.index:
+            m = QMenu(self)
+            a = m.addAction("Rename samples to their IDs…")
+            a.setToolTip("e.g. HO0046_FUN_HAT.WAV; every kit, synth and song is updated")
+            if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
+                folders = None if d[0] == "devroot" else (set(layout.DRUM_FOLDERS) if d[1] == "Drums" else {d[1]})
+                self._rename_to_ids(folders)
+            return
         if d and d[0] in ("srcq", "sourcesroot"):
             m = QMenu(self)
             a = m.addAction("🔒 The library's folders are never changed by the app")
@@ -1504,6 +1550,21 @@ class MainWindow(QMainWindow):
         a.setEnabled(bool(todo) and self.card is not None)
         if m.exec(self.tree.viewport().mapToGlobal(pos)) is a:
             self._send_lib([r["rel"] for r in todo])
+
+    def _rename_to_ids(self, folders=None):
+        """0.11: rename card samples to their library IDs (HO0046_FUN_HAT.WAV) through the pending tray."""
+        from dsm.edit.idnames import rename_batch
+        rels = [r for r, f in self.card_types.items() if folders is None or f in folders]
+        batch, skipped = rename_batch(self.card, rels, self.card_audio, self.id_labels)
+        if not batch:
+            QMessageBox.information(self, APP_NAME, "Nothing to rename: " + (skipped or "every sample already has its ID name."))
+            return
+        msg = (f"Rename {len(batch.moves):,} sample{'s' if len(batch.moves) != 1 else ''} on the card to their IDs, "
+               "e.g.\n\n" + "\n".join(f"{o.rsplit('/', 1)[-1]} → {n.rsplit('/', 1)[-1]}" for o, n in batch.moves[:5])
+               + ("\n…" if len(batch.moves) > 5 else "") + "\n\nEvery kit, synth and song that uses them is updated. "
+               "The change goes to the pending tray; nothing happens until you press Apply." + (f"\n\n{skipped}" if skipped else ""))
+        if QMessageBox.question(self, APP_NAME, msg) == QMessageBox.Yes:
+            self._add_edit(batch)
 
     # ------------------------------------------------------------------ rename / move / relink (M4)
     def _add_edit(self, batch):
@@ -1864,7 +1925,7 @@ class MainWindow(QMainWindow):
             dests = [i.card_rel for b in self.pending if getattr(b, "kind", "import") != "edit" for i in b.active]
             dests += [n for b in self.pending if getattr(b, "kind", "") == "edit" for _, n in b.moves]
             dlg = ImportDialog(files, infos, self.card, self.settings["library_root"], self.mapping, dests, self,
-                               aliases=aliases)
+                               aliases=aliases, names=self.libdb.labels_by_rel())
             if dlg.exec() and dlg.batch and dlg.batch.active:
                 self.pending.append(dlg.batch)
                 self._update_tray()

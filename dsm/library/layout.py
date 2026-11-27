@@ -25,9 +25,10 @@ LOOPS = "Loops"
 ARCHIVE = "Archive"                   # Clean up Studio.cmd moves things here; never read
 SKIP_DIRS = {APP_FOLDER.lower(), OLD_APP_FOLDER.lower(), ARCHIVE.lower(), BACKUPS.lower()}
 
-# The type lists in the left pane, in order. A guessed "Hat" (open or closed unknown) is listed under Other drums
-# until it is set by hand.
-TYPE_FOLDERS = ["Kick", "Snare", "Clap", "Closed hat", "Open hat", "Cymbal", "Tom", "Percussion", "Other drums",
+# The type lists in the left pane, in order. "Hat" holds hats whose name and length don't say open or closed.
+DRUM_FOLDERS = ["Kick", "Snare", "Clap", "Closed hat", "Open hat", "Hat", "Cymbal", "Tom", "Percussion",
+                "Other drums"]
+TYPE_FOLDERS = ["Kick", "Snare", "Clap", "Closed hat", "Open hat", "Hat", "Cymbal", "Tom", "Percussion", "Other drums",
                 "Bass", "Synth", "Keys", "Pad", "Drone", "Vocal", "FX", "Instrument", stypes.UNKNOWN]
 
 
@@ -36,8 +37,6 @@ def type_folder(types: list[str]) -> str:
     for t in types or []:
         if t in TYPE_FOLDERS:
             return t
-        if t == "Hat":
-            return "Other drums"
     return stypes.UNKNOWN
 
 

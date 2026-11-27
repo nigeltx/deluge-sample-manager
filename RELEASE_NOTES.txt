@@ -1,3 +1,30 @@
+Sample Manager. Version 0.11.0 — sample IDs and a Patch Manager-style left pane.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+Windows may warn that the publisher is unknown: choose "More info" then "Run anyway".
+
+Sample IDs
+- Every sample has an ID: two letters for its type, a number and its name, e.g. HO0046 Fun Hat.
+  KK Kick · SN Snare · CP Clap · HC Closed hat · HO Open hat · HH Hat (open or closed?) · CY Cymbal · TM Tom ·
+  PC Percussion · DR Other drums · BS Bass · SY Synth · KY Keys · PD Pad · DN Drone · VX Vocal · FX FX ·
+  IN Instrument · UN Unknown.
+- The ID belongs to the sound, so it stays the same if a file is renamed or moved, and copies of the same sound
+  share it. Numbers are never reused. Changing a sample's type with Set type… gives it a new ID for the new type.
+- The list's Name column shows the ID; the details pane still shows the file. Search finds IDs (type kk0046).
+- Samples sent to the Deluge from now on are named after their ID, e.g. HO0046_FUN_HAT.WAV.
+- Right-click TARGETS › DELUGE (or one of its types) → Rename samples to their IDs… renames samples already on
+  the card, with every kit, synth and song updated. It goes through the pending tray, and History can undo it.
+  Factory samples, the Deluge's own recordings, and card samples with no copy in the library keep their names.
+
+Left pane
+- LIBRARY: every sample by type, with drums grouped (Drums › Kick, Snare, Clap, Closed hat, Open hat,
+  Hats open or closed?, Cymbal, Tom, Percussion, Other drums), then Bass … Unknown.
+- SOURCES 🔒: Factory, Paid, Free and User with their packs (was FOLDERS).
+- TARGETS › DELUGE: the samples on the card, by type, plus Unused on card, Won't play and Duplicates on card.
+  The card's folder tree is gone.
+- SMART LISTS as before.
+- The Pack column shows only the folder the sample is in.
+
 Sample Manager. Version 0.10.0 — duplicates.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

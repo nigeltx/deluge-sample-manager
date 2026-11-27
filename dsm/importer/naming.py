@@ -113,8 +113,10 @@ def guess_vendor_pack(src: str, library_root: str | None, drop_root: str | None)
     return None, vendor, pack
 
 
-def card_path(source: str, vendor: str, pack: str, original: str, rel_in_pack: str | None = None) -> str:
-    """Card-relative destination for one file (before clash handling)."""
+def card_path(source: str, vendor: str, pack: str, original: str, rel_in_pack: str | None = None,
+              name: str | None = None) -> str:
+    """Card-relative destination for one file (before clash handling). name: the sample's ID label
+    ("HO0046 Fun Hat"), used for the file name in place of the original's."""
     source = source.upper()
     if source == "FACTORY":
         sub = [clean(p) for p in (rel_in_pack or os.path.basename(original)).replace("\\", "/").split("/")[:-1]]
@@ -122,7 +124,7 @@ def card_path(source: str, vendor: str, pack: str, original: str, rel_in_pack: s
     parts_for_class = [os.path.basename(original)] + list(reversed((rel_in_pack or "").replace("\\", "/").split("/")[:-1]))
     cat, sub = classify(parts_for_class)
     segs = ["SAMPLES", source, clean(vendor or "UNKNOWN"), clean(pack or "MISC"), cat] + ([sub] if sub else [])
-    return "/".join(segs + [card_name(os.path.basename(original))])
+    return "/".join(segs + [card_name(name + ".wav" if name else os.path.basename(original))])
 
 
 def unique(path: str, taken) -> str:
