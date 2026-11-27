@@ -1523,8 +1523,8 @@ class MainWindow(SyntaktMixin, QMainWindow):
             if unused:
                 acts[m.addAction(f"Move {len(unused)} unused to the card trash")] = "trash"
         syn_rows = [r for r in rows if r and r["where"] == "syntakt"]
-        if self.syn:
-            to_syn = [r for r in lib_rows if r.get("audio") not in self.on_syntakt]
+        if self.syn:                             # factory library samples can be sent too (0.12.1)
+            to_syn = [r for r in rows if r and r["where"] == "lib" and r.get("audio") not in self.on_syntakt]
             if to_syn:
                 acts[m.addAction(f"Send {len(to_syn)} to the Syntakt…")] = "syn-send"
             if syn_rows:

@@ -4,9 +4,10 @@ What the app does with the Syntakt's 64 sample slots:
 - **List** them with names and sizes, by type, matched to the library.
 - **Read** any of them to the PC, for audition and Get from device (a cache keeps what was read).
 - **Twin Shot check**: compare the slots with Factory › Syntakt in the library — complete, or what differs.
-- **Send** a converted copy (48 kHz 16-bit mono, name cut to 16 characters) into an empty slot, or a slot holding a
-  sample the app itself put there; **Remove** only samples the app put there. Factory samples are locked, and the
-  app never touches a sample it did not put on the Syntakt (samples are global: every project using one would change).
+- **Send** a converted copy (48 kHz 16-bit mono, name cut to 16 characters) into an empty slot, or into a slot you
+  pick to replace (0.12.1, Nigel's choice). Replacing a factory sample or a sample the app didn't put there needs a
+  separate "yes, replace it" (replace=True): samples are global, so every project using one changes. **Remove**
+  works on any sample except factory ones, again only after that warning.
 - Every Send and Remove first saves what was in the slot to Backups › Syntakt, then reads the new sample back to
   check it, and is recorded in a journal so **Undo** can put the slot back. The Syntakt must be restarted before it
   plays samples written to it.
@@ -220,11 +221,12 @@ class Syntakt:
             fh.write(data)
         return p
 
-    def send(self, n: int, data: bytes, backup_dir: str, progress=None) -> str:
-        """Write data (proto.build_sample) to slot n; returns the backup of what was there ('' if empty)."""
+    def send(self, n: int, data: bytes, backup_dir: str, progress=None, replace=False) -> str:
+        """Write data (proto.build_sample) to slot n; returns the backup of what was there ('' if empty).
+        replace=True: the user has agreed to replace whatever is there, factory sample or not."""
         before = self.slot(n)
         why = locked(before)
-        if why:
+        if why and not replace:
             raise proto.SyntaktError(f"Slot {n} holds {why}")
         bk = self._backup(before, backup_dir)
         self.el.write(n, data, progress)
@@ -232,12 +234,13 @@ class Syntakt:
             raise proto.SyntaktError(f"slot {n} reads back different from what was sent")
         return bk
 
-    def remove(self, n: int, backup_dir: str) -> str:
+    def remove(self, n: int, backup_dir: str, confirmed=False) -> str:
+        """confirmed=True: the user agreed to remove a sample the app didn't put there (never a factory one)."""
         s = self.slot(n)
         why = locked(s)
         if s is None:
             raise proto.SyntaktError(f"Slot {n} is already empty")
-        if why:
+        if why and (s.how.startswith("factory") or not confirmed):
             raise proto.SyntaktError(f"Slot {n} holds {why}")
         bk = self._backup(s, backup_dir)
         self.el.clear(n)

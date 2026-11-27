@@ -109,3 +109,31 @@ def test_journal(tmp_path):
     dev.add_journal(d, {"action": "remove", "slot": 2, "backup": "x.bin"})
     assert dev.pop_journal(d)["action"] == "remove"
     assert dev.pop_journal(d)["slot"] == 2 and dev.pop_journal(d) is None
+
+
+def test_replace_needs_consent_and_factory_never_removed(tmp_path):
+    factory = proto.build_sample(1, "BD BAUTA", tone(2000))
+    mine = proto.build_sample(2, "HALLELUJAH", tone(4000))
+    fake, s = connected({1: factory, 2: mine})
+    s.refresh()
+    s.slot(1).how = "factory (Twin Shot)"
+    new = proto.build_sample(1, "FX0040 TRANSIENT", tone(3000))
+    with pytest.raises(proto.SyntaktError):
+        s.send(1, new, str(tmp_path / "bk"))                       # not without replace=True
+    bk = s.send(1, new, str(tmp_path / "bk"), replace=True)        # the user agreed
+    assert fake.slots[1] == new and open(bk, "rb").read() == factory
+    with pytest.raises(proto.SyntaktError):
+        s.remove(2, str(tmp_path / "bk"))                          # yours: only when confirmed
+    s.remove(2, str(tmp_path / "bk"), confirmed=True)
+    assert 2 not in fake.slots
+    s.refresh()
+    s.slot(1).how = "factory (Twin Shot)"
+    with pytest.raises(proto.SyntaktError, match="factory"):
+        s.remove(1, str(tmp_path / "bk"), confirmed=True)          # never a factory sample
+
+
+def test_your_samples_match_by_name():
+    slots = [dev.Slot(63, "HALLELUJAH", 64 + 2 * 48000)]
+    dev.match_slots(slots, factory_rows(), {"slots": {}},
+                    [{"rel": "User/Syntakt/Hallelujah.wav", "name": "Hallelujah.wav", "frames": 44100, "rate": 44100}])
+    assert slots[0].match == "User/Syntakt/Hallelujah.wav" and slots[0].how == "same name and length"

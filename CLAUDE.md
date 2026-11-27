@@ -30,8 +30,8 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
 - `dsm/syntakt` — 0.12, the Syntakt's +Drive samples over USB (bench-tested 27 Nov 2026, findings in the claude.ai project
   claude/syntakt-bench-test/sample-findings-2026-11-27.md): `proto.py` the Elektron protocol and sample format (read/write by
   slot, footer in its own block, 48 kHz 16-bit mono big-endian, names 16 chars); `device.py` slots, matching to Factory › Syntakt
-  by name + 48 kHz length (audio identity can't match: the Syntakt resamples), Twin Shot check, Send/Remove only into empty or
-  app-filled slots (record _Sample Manager/syntakt.json), backups to Backups › Syntakt, journal + Undo. `ui/syntakt_ui.py` the
+  by name + 48 kHz length (audio identity can't match: the Syntakt resamples), Twin Shot check, Send into empty slots or (0.12.1)
+  a slot the user picks to replace after a warning; Remove any non-factory sample after a warning (record _Sample Manager/syntakt.json), backups to Backups › Syntakt, journal + Undo. `ui/syntakt_ui.py` the
   window side (a mixin of MainWindow). `tests/fake_syntakt.py` answers like the real one (refuses a footer sent with the audio).
   Syntakt changes don't use the pending tray: each asks first, backs up, reads back. The Syntakt needs a restart to use new samples.
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs

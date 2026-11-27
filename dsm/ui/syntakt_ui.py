@@ -11,7 +11,7 @@ import os
 import time
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMenu, QMessageBox, QTreeWidgetItem
+from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTreeWidgetItem
 
 from dsm import APP_NAME
 from dsm.audio.inspect import AudioInfo
@@ -96,7 +96,15 @@ class SyntaktMixin:
             return
         root = self.settings["library_root"]
         rows = self._syn_factory_rows()
-        sdev.match_slots(self.syn.slots, rows, sdev.load_record(root))
+        fac_keys = {sdev.name_key(r["name"]) for r in rows}
+        others, seen = [], set()
+        for s in self.syn.slots:                 # your own samples: look them up in the library by name (0.12.1)
+            if s.name not in fac_keys and s.name.split():
+                for r in self.libdb.query(text=s.name.lower(), limit=50):
+                    if r["rel"] not in seen and sdev.name_key(r["name"]) == s.name:
+                        seen.add(r["rel"])
+                        others.append(r)
+        sdev.match_slots(self.syn.slots, rows, sdev.load_record(root), others)
         self.syn_check = sdev.twin_check(self.syn.slots, rows)
         audio = self.libdb.audio_of([s.match for s in self.syn.slots if s.match])
         folders = self.libdb.listed_folders()
@@ -233,28 +241,48 @@ class SyntaktMixin:
                       "Backing up the Syntakt's samples…")
 
     def _syn_send(self, lib_rows):
-        """Send library samples to empty slots (spec 4.3). Factory samples and slots the app didn't fill are locked."""
+        """Send library samples (factory ones too) to the Syntakt: empty slots first, then a slot you pick to replace
+        (0.12.1). Replacing asks again, says what will change, backs the slot up, and Undo puts it back."""
         syn, root = self.syn, self.settings["library_root"]
-        free = sdev.free_slots(syn.slots)
-        if not free:
-            QMessageBox.information(
-                self, APP_NAME, f"All {proto.SLOTS} slots on the Syntakt are in use, so there is no room.\n\n"
-                "The app only writes into empty slots or slots it filled itself; the factory samples and samples the "
-                "app didn't put there are never replaced, because every project that uses them would change.")
-            return
-        todo = [r for r in lib_rows if r.get("audio") not in self.on_syntakt][:len(free)]
+        todo = [r for r in lib_rows if r.get("audio") not in self.on_syntakt]
         if not todo:
             QMessageBox.information(self, APP_NAME, "Those samples are on the Syntakt already.")
             return
-        plan = [(free[k], r) for k, r in enumerate(todo)]
-        lines = [f"slot {n:2d}  ←  {proto.clean_name(r['name'])}" for n, r in plan]
+        free = sdev.free_slots(syn.slots)
+        plan = []
+        for r in todo:
+            if free:
+                plan.append((free.pop(0), r))
+                continue
+            taken = {n for n, _ in plan}
+            choices = [f"{s.slot:2d}  {s.name}  —  " + ("factory" if s.how.startswith("factory") else
+                                                         "sent by the app" if s.how == "sent by the app" else "yours")
+                       for s in sorted(syn.slots, key=lambda x: x.slot) if s.slot not in taken]
+            pick, ok = QInputDialog.getItem(self, APP_NAME, f"Every slot is in use. Which slot should "
+                                                            f"{proto.clean_name(r['name'])} replace?\n(The sample in "
+                                                            "it is saved to Backups › Syntakt first.)", choices, 0, False)
+            if not ok:
+                return
+            plan.append((int(pick.split()[0]), r))
+        lines, warn = [], []
+        for n, r in plan:
+            old = syn.slot(n)
+            lines.append(f"slot {n:2d}  ←  {proto.clean_name(r['name'])}"
+                         + (f"   (replaces {old.name})" if old else "   (empty slot)"))
+            if old and old.how.startswith("factory"):
+                warn.append(f"slot {n} {old.name} is a FACTORY sample — the Twin Shot check will show it missing")
+            elif old and old.how != "sent by the app":
+                warn.append(f"slot {n} {old.name} is a sample you put there")
         more = len(lib_rows) - len(todo)
         if QMessageBox.question(
-                self, APP_NAME, f"Send {len(plan)} sample{'s' if len(plan) != 1 else ''} to empty slots on the Syntakt?\n\n"
+                self, APP_NAME, f"Send {len(plan)} sample{'s' if len(plan) != 1 else ''} to the Syntakt?\n\n"
                 + "\n".join(lines[:20]) + ("\n…" if len(lines) > 20 else "")
-                + "\n\nEach is converted to 48 kHz 16-bit mono (stereo is folded to mono) and its name cut to 16 "
-                  "characters. Each is read back to check it." + (f"\n\n{more} not sent: on the Syntakt already or "
-                                                                    "no free slot left." if more else "")
+                + ("\n\nReplacing:\n• " + "\n• ".join(warn) + "\nSamples are global on the Syntakt: every project "
+                   "that uses a replaced sample will play the new one. Each replaced sample is saved to Backups › "
+                   "Syntakt first, and Undo (right-click SYNTAKT) puts it back." if warn else "")
+                + "\n\nEach is converted to 48 kHz 16-bit mono (stereo is folded to mono), its name cut to 16 "
+                  "characters, and read back to check it." + (f"\n\n{more} not sent: on the Syntakt already."
+                                                                 if more else "")
                 + "\n\n" + RESTART) != QMessageBox.Yes:
             return
         bdir = self._syn_backup_dir()
@@ -268,12 +296,16 @@ class SyntaktMixin:
                     else r["abs"]
                 audio, changed = proto.to_syntakt_audio(src)
                 data = proto.build_sample(n, r["name"], audio)
-                bk = syn.send(n, data, bdir)
-                syn.slots.append(sdev.Slot(n, proto.clean_name(r["name"]), len(data) - 43))
+                prev = rec.get("slots", {}).get(str(n))
+                bk = syn.send(n, data, bdir, replace=True)          # the user has just agreed to the plan
+                syn.slots = [x for x in syn.slots if x.slot != n] + [sdev.Slot(n, proto.clean_name(r["name"]),
+                                                                               len(data) - 43, r["librel"],
+                                                                               "sent by the app")]
                 rec.setdefault("slots", {})[str(n)] = {"library": r["librel"], "name": proto.clean_name(r["name"]),
                                                        "size": len(data) - 43, "sent": time.strftime("%Y-%m-%d %H:%M")}
                 sdev.save_record(root, rec)
-                sdev.add_journal(app_dir(), {"action": "send", "slot": n, "backup": bk, "library": r["librel"]})
+                sdev.add_journal(app_dir(), {"action": "send", "slot": n, "backup": bk, "library": r["librel"],
+                                             "record": prev})
                 if changed:
                     notes.append(f"slot {n}: " + ", ".join(changed))
             return notes
@@ -285,10 +317,11 @@ class SyntaktMixin:
 
     def _syn_remove(self, rows):
         syn, root = self.syn, self.settings["library_root"]
-        ok = [r for r in rows if not sdev.locked(syn.slot(r["slot"]))]
+        ok = [r for r in rows if syn.slot(r["slot"]) and not syn.slot(r["slot"]).how.startswith("factory")]
         if not ok:
-            QMessageBox.information(self, APP_NAME, "The app only removes samples it put on the Syntakt itself. "
-                                                    "Factory samples and others are locked.")
+            QMessageBox.information(self, APP_NAME, "Factory samples can't be removed from the Syntakt. To use a "
+                                                    "factory slot for something else, send a sample to it: it asks "
+                                                    "which slot to replace when every slot is in use.")
             return
         if QMessageBox.question(
                 self, APP_NAME, f"Remove {len(ok)} sample{'s' if len(ok) != 1 else ''} from the Syntakt?\n\n"
@@ -302,7 +335,7 @@ class SyntaktMixin:
             rec = sdev.load_record(root)
             for k, r in enumerate(ok):
                 progress(k, len(ok), f"Removing slot {r['slot']}")
-                bk = syn.remove(r["slot"], bdir)
+                bk = syn.remove(r["slot"], bdir, confirmed=True)
                 entry = rec.get("slots", {}).pop(str(r["slot"]), None)
                 sdev.save_record(root, rec)
                 sdev.add_journal(app_dir(), {"action": "remove", "slot": r["slot"], "backup": bk, "record": entry})
@@ -327,7 +360,7 @@ class SyntaktMixin:
             syn.put_back(e["slot"], e.get("backup", ""))
             sdev.pop_journal(app_dir())
             rec = sdev.load_record(root)
-            if e["action"] == "send":
+            if e["action"] == "send" and not e.get("record"):
                 rec.get("slots", {}).pop(str(e["slot"]), None)
             elif e.get("record"):
                 rec.setdefault("slots", {})[str(e["slot"])] = e["record"]

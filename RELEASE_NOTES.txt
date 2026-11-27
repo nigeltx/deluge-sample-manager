@@ -1,3 +1,18 @@
+Sample Manager. Version 0.12.1 — send any sample to the Syntakt, choosing a slot to replace.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Factory samples in the library (FX0040 TRANSIENT 07, for example) can now be sent to the Syntakt: right-click
+  them › Send to the Syntakt….
+- When every slot is in use, Send asks which slot to replace. The list says what each slot holds: factory, yours,
+  or sent by the app. Before anything is written it lists every replacement — a factory sample, or one you put
+  there — and asks again. The replaced sample is saved to Backups › Syntakt, and right-click SYNTAKT › Undo the
+  last Syntakt change puts it back.
+- Your own samples on the Syntakt are found in the library by name and length, so they show their IDs too.
+- Remove from the Syntakt works on your own samples as well as the app's, after a warning; never on factory
+  samples.
+- Restart the Syntakt after a change, as before.
+
 Sample Manager. Version 0.12.0 — the Syntakt.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.
