@@ -1022,7 +1022,7 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         self.table.setCurrentCell(-1, -1)
         self.rows = rows
         self.table.setSortingEnabled(False)
-        self.table.setUpdatesEnabled(False)
+        self._table_frozen(True)
         self.table.setRowCount(0)               # drop the old items first: replacing items one by one is very slow
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
@@ -1076,7 +1076,7 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
             self.table.setItem(i, 9, si)
             self._fill_tag_cells(i, row)
         self.table.setSortingEnabled(True)
-        self.table.setUpdatesEnabled(True)
+        self._table_frozen(False)
         self.list_label.setText(f"{title} · {len(rows)} files · reading headers…" if rows else f"{title} · no audio files")
         if not rows:
             return
@@ -1097,11 +1097,31 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         run_job(Job(work, wants_progress=True), done=lambda infos: self._rows_inspected(gen, title, infos),
                 failed=self._job_failed)
 
+    def _table_frozen(self, on: bool):
+        """Before and after filling many cells. Columns sized to their contents would be measured again over every
+        row after each cell (thousands of rows: minutes — the hang on right-clicking TARGETS › DELUGE in 0.15), so
+        while filling they are fixed, and measured once at the end."""
+        hh = self.table.horizontalHeader()
+        if on:
+            self._frozen_depth = getattr(self, "_frozen_depth", 0) + 1
+            if self._frozen_depth == 1:
+                self.table.setUpdatesEnabled(False)
+                self._frozen_modes = {c: hh.sectionResizeMode(c) for c in range(self.table.columnCount())}
+                for c, mode in self._frozen_modes.items():
+                    if mode == QHeaderView.ResizeToContents:
+                        hh.setSectionResizeMode(c, QHeaderView.Fixed)
+            return
+        self._frozen_depth = max(0, getattr(self, "_frozen_depth", 1) - 1)
+        if self._frozen_depth == 0:
+            for c, mode in getattr(self, "_frozen_modes", {}).items():
+                hh.setSectionResizeMode(c, mode)
+            self.table.setUpdatesEnabled(True)
+
     def _rows_inspected(self, gen, title, infos):
         if gen != self.list_gen:
             return
         self.table.setSortingEnabled(False)
-        self.table.setUpdatesEnabled(False)
+        self._table_frozen(True)
         by_abs = {i.path: i for i in infos}
         bad = convert = 0
         for r in range(self.table.rowCount()):
@@ -1129,7 +1149,7 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
             s.setForeground(col)
             self.table.setItem(r, 7, s)
         self.table.setSortingEnabled(True)
-        self.table.setUpdatesEnabled(True)
+        self._table_frozen(False)
         bits = [f"{title} · {len(infos)} file{'s' if len(infos) != 1 else ''}"]
         if bad:
             bits.append(f"{bad} won't play on the Deluge")

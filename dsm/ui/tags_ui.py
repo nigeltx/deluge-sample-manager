@@ -164,7 +164,9 @@ class TagsMixin:
         whole = audios is None
         if whole:                           # turning sorting back on sorts the whole list again: only for all rows
             self.table.setSortingEnabled(False)
-        self.table.setUpdatesEnabled(False)
+            self._table_frozen(True)       # many cells: columns measured once at the end
+        else:
+            self.table.setUpdatesEnabled(False)
         try:
             for row in self.rows:
                 if audios is not None and row.get("audio") not in audios:
@@ -176,9 +178,11 @@ class TagsMixin:
         except RuntimeError:                # the list was refilled meanwhile: its old items are gone
             pass
         finally:
-            self.table.setUpdatesEnabled(True)
             if whole:
+                self._table_frozen(False)
                 self.table.setSortingEnabled(True)
+            else:
+                self.table.setUpdatesEnabled(True)
 
     # ---------------------------------------------------------------- the details pane
     def _build_tag_rows(self, form):

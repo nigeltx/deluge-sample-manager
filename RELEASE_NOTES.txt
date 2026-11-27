@@ -1,3 +1,11 @@
+Sample Manager. Version 0.15.1 — fixes the hang on right-clicking TARGETS › DELUGE.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Fixed: clicking or right-clicking DELUGE under TARGETS froze the app. It lists every sample on the card (thousands)
+  and, as each file's details came in, the list measured its column widths again over every row. Now it measures
+  once at the end: a 3,000-sample card lists in under a second.
+
 Sample Manager. Version 0.15.0 — factory samples sorted by type too.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.
