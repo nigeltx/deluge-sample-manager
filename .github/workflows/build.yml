@@ -77,7 +77,10 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem installer\SampleManager-Setup-*.exe | Select-Object -First 1
-          $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          # Setup starts the app when it finishes (as the updater needs); -Wait would wait for that too, so wait
+          # for Setup alone.
+          $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -PassThru
+          if (-not $p.WaitForExit(600000)) { throw "Setup didn't finish in 10 minutes" }
           if ($p.ExitCode -ne 0) { throw "Setup exited with $($p.ExitCode)" }
           Start-Sleep -Seconds 5
           Get-Process SampleManager -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -87,7 +90,8 @@ jobs:
           $exe = "$env:LOCALAPPDATA\Programs\Sample Manager\SampleManager.exe"
           if (-not (Test-Path $exe)) { throw "Not installed at $exe" }
           $dir = "$env:RUNNER_TEMP\selftest"
-          $p = Start-Process $exe -ArgumentList "--selftest", "`"$dir`"" -Wait -PassThru
+          $p = Start-Process $exe -ArgumentList "--selftest", "`"$dir`"" -PassThru
+          if (-not $p.WaitForExit(300000)) { Stop-Process $p -Force; throw "Self-test didn't finish in 5 minutes" }
           Get-Content "$dir\selftest.txt"
           if ($p.ExitCode -ne 0) { throw "Self-test failed (exit $($p.ExitCode))" }
 
