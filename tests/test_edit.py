@@ -151,3 +151,26 @@ def test_sort_card_by_type(env):
     assert not os.path.isdir(card.abs("SAMPLES/PAID/MARS/808/DRUMS/SNARE"))   # emptied folders removed
     again, _ = sort_batch(card, {"SAMPLES/DRUMS/KICK/KK0007_BD_808_01.WAV": "Kick"}, {}, {})
     assert again is None                                                     # in place already
+
+
+def test_junk_files_found_and_trashed(env):
+    """0.16: files other programs leave (.reapeaks, .asd, Thumbs.db) are found by the health check and can be moved
+    to the card trash — also beside factory samples, where they aren't locked."""
+    from dsm.index.health import check, junk_files
+    card, idx, m, bk = env
+    for rel in ("SAMPLES/FACTORY/DRUMS/Clap/808 Clap.WAV.reapeaks", "SAMPLES/PAID/MARS/808/x.wav.asd", "KITS/Thumbs.db"):
+        os.makedirs(os.path.dirname(card.abs(rel)), exist_ok=True)
+        open(card.abs(rel), "wb").write(b"junk")
+    card.scan()
+    junk = junk_files(card)
+    assert junk == ["KITS/Thumbs.db", "SAMPLES/FACTORY/DRUMS/Clap/808 Clap.WAV.reapeaks", "SAMPLES/PAID/MARS/808/x.wav.asd"]
+    idx = build_index(card)
+    rep = check(idx)
+    assert rep.of("junk") and rep.of("junk")[0].suggestions == junk
+    b = ed.EditBatch("junk", trash=junk)
+    p = ed.plan([b], idx)
+    assert not p.problems, p.problems
+    ed.apply(p, [b], card, m, bk, False)
+    card.scan()
+    assert junk_files(card) == [] and not card.exists("KITS/Thumbs.db")
+    assert any("reapeaks" in r for r in card.files if r.startswith("dsm_trash/"))

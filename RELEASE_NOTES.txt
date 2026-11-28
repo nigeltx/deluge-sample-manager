@@ -1,3 +1,14 @@
+Sample Manager. Version 0.16.0 — the health check finds files left by other programs.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Card › Health check has a new section, "Files left by other programs": waveform and analysis files that audio
+  programs leave beside samples (REAPER .reapeaks, Ableton .asd, Audition .pk, Sound Forge .sfk …) and folder files
+  (Thumbs.db, desktop.ini, .DS_Store), anywhere on the card. The Deluge never reads them.
+- Select the finding and press "Move them to the card trash": the move goes to Pending; nothing changes until Apply,
+  History can undo it, and the files go to DSM_TRASH, never deleted.
+- Such files beside factory samples are no longer treated as locked factory samples.
+
 Sample Manager. Version 0.15.2 — the factory record forgets files that aren't samples.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

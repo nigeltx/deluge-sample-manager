@@ -1430,6 +1430,9 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
                 dlg.relink.connect(lambda old, new: self._add_edit(ed.EditBatch(
                     f"Relink {old.rsplit('/', 1)[-1]} → {new}", relinks=[(old, new)])))
                 dlg.factory.connect(self._initialize_factory)
+                dlg.junk.connect(lambda files: self._add_edit(ed.EditBatch(
+                    f"Move {len(files)} file{'s' if len(files) != 1 else ''} left by other programs to the card trash",
+                    trash=list(files))))
                 dlg.show()
         run_job(Job(work, wants_progress=True), done=done, failed=self._job_failed, progress=self._progress)
 

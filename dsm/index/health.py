@@ -18,7 +18,7 @@ MAX_PATH = 120
 
 @dataclass
 class Finding:
-    kind: str           # missing, unused, convert, name, temp, layout, xml
+    kind: str           # missing, unused, convert, name, temp, layout, xml, junk (0.16)
     title: str
     detail: str = ""
     path: str = ""      # the card path this is about
@@ -44,10 +44,35 @@ def _area(rel: str) -> str:
     return parts[0]
 
 
+# Files other programs leave beside samples (0.16): waveform and analysis caches, Windows and Mac folder files.
+# The Deluge never reads them. Moved to the card trash on request, never deleted.
+JUNK_EXTS = {".reapeaks", ".reapindex", ".asd", ".pk", ".pkf", ".sfk", ".sfap0", ".gpk", ".peak", ".ovw", ".mrk"}
+JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db"}
+
+
+def junk_files(card) -> list[str]:
+    """Card files left by other programs (REAPER .reapeaks, Ableton .asd, Thumbs.db …), outside the card trash and
+    the app's DSM folder."""
+    out = []
+    for low, rel in card.files.items():
+        if low.startswith(("dsm_trash/", "samples/dsm_trash/", "dsm/")):
+            continue
+        name = low.rsplit("/", 1)[-1]
+        if name in JUNK_NAMES or os.path.splitext(name)[1] in JUNK_EXTS:
+            out.append(rel)
+    return sorted(out, key=str.lower)
+
+
 def check(idx: CardIndex, library_files: list[str] | None = None, progress=None) -> HealthReport:
     card = idx.card
     rep = HealthReport()
     F = rep.findings.append
+    junk = junk_files(card)
+    if junk:
+        F(Finding("junk", f"{len(junk)} file{'s' if len(junk) != 1 else ''} left by other programs",
+                  "Not samples: waveform caches (REAPER .reapeaks, Ableton .asd …) and folder files (Thumbs.db, "
+                  "desktop.ini …). The Deluge never reads them. Press Move them to the card trash.\n\n" +
+                  "\n".join(junk), "", list(junk)))
     lib_names = basename_map(library_files or [])
     card_names = basename_map(card.sample_files())
 

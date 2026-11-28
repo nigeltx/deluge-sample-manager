@@ -18,10 +18,13 @@ SECTIONS = [
                                    "relinking arrives in milestone M4."),
     ("convert", "Won't play on the Deluge", "Wrong header or format. Conversion arrives in milestone M3."),
     ("xml", "Damaged preset files", "These XML files are not well-formed. The Deluge may refuse to load them."),
-    ("layout", "Folder layout", "Where the card differs from the FREE / FACTORY / PAID layout."),
+    ("layout", "Folder layout", "Where the card differs from the type folders (SAMPLES/DRUMS/KICK, SAMPLES/BASS …)."),
     ("unused", "Unused samples", "No kit, synth or song uses these. Nothing is removed automatically."),
     ("name", "Names outside the rules", "Fine for the Deluge, but outside the app's naming rules (spec Table 2.3)."),
     ("temp", "Leftover clip takes", "Unsaved audio-clip recordings in CLIPS/TEMP."),
+    ("junk", "Files left by other programs", "Waveform caches and folder files other programs leave beside samples "
+                                             "(REAPER .reapeaks, Ableton .asd, Thumbs.db …). The Deluge never reads "
+                                             "them. Move them to the card trash adds the move to Pending."),
 ]
 
 
@@ -29,6 +32,7 @@ class HealthDialog(QDialog):
     show_path = Signal(str)
     relink = Signal(str, str)          # missing path as written, card file to point at
     factory = Signal()
+    junk = Signal(list)                # files to move to the card trash
 
     def __init__(self, report: HealthReport, card_label: str, parent=None):
         super().__init__(parent)
@@ -40,7 +44,9 @@ class HealthDialog(QDialog):
         summary = ((f"<b style='color:#b91c1c'>{c['factory']}</b> factory samples missing or changed · "
                     if c.get("factory") else "") + f"<b>{c.get('missing', 0)}</b> missing · <b>{c.get('convert', 0)}</b> won't play · "
                    f"<b>{c.get('unused_files', 0)}</b> unused · <b>{c.get('xml', 0)}</b> damaged presets · "
-                   f"<b>{c.get('name', 0)}</b> naming · <b>{c.get('temp', 0)}</b> leftover takes. "
+                   f"<b>{c.get('name', 0)}</b> naming · <b>{c.get('temp', 0)}</b> leftover takes · "
+                   f"<b>{len(report.of('junk')[0].suggestions) if report.of('junk') else 0}</b> files left by other "
+                   "programs. "
                    "This check only reads the card — nothing was changed.")
         lay.addWidget(QLabel(summary))
         split = QSplitter()
@@ -65,7 +71,7 @@ class HealthDialog(QDialog):
                 ch = QTreeWidgetItem([it.title])
                 ch.setData(0, Qt.UserRole, ("finding", it))
                 top.addChild(ch)
-            top.setExpanded(kind in ("missing", "convert", "xml", "layout") and len(items) <= 50)
+            top.setExpanded(kind in ("missing", "convert", "xml", "layout", "junk") and len(items) <= 50)
         self.tree.currentItemChanged.connect(self._select)
         btns = QHBoxLayout()
         self.go = QPushButton("Show in browser")
@@ -81,6 +87,10 @@ class HealthDialog(QDialog):
         self.fact = QPushButton("Move the factory library under FACTORY…")
         self.fact.hide()
         self.fact.clicked.connect(lambda: (self.factory.emit(), self.accept()))
+        self.trash = QPushButton("Move them to the card trash")
+        self.trash.setToolTip("Adds the move to Pending; nothing changes until Apply, and History can undo it")
+        self.trash.hide()
+        self.trash.clicked.connect(self._junk)
         copy = QPushButton("Copy report")
         copy.clicked.connect(self._copy)
         close = QPushButton("Close")
@@ -89,6 +99,7 @@ class HealthDialog(QDialog):
         btns.addWidget(self.fix)
         btns.addWidget(self.pick)
         btns.addWidget(self.fact)
+        btns.addWidget(self.trash)
         btns.addStretch()
         btns.addWidget(copy)
         btns.addWidget(close)
@@ -101,6 +112,7 @@ class HealthDialog(QDialog):
         self.fix.hide()
         self.pick.hide()
         self.fact.hide()
+        self.trash.hide()
         if kind == "help":
             self.detail.setPlainText(val)
             self.go.setEnabled(False)
@@ -112,6 +124,11 @@ class HealthDialog(QDialog):
                 self.fix.show()
         if val.kind == "layout" and "outside FREE" in val.title:
             self.fact.show()
+        if val.kind == "junk":
+            self.trash.show()
+            self.detail.setPlainText(val.title + "\n\n" + val.detail)
+            self.go.setEnabled(False)
+            return
         text = val.title + "\n\n" + val.detail
         if val.suggestions:
             text += "\n\nPossible matches:\n  " + "\n  ".join(val.suggestions)
@@ -132,6 +149,13 @@ class HealthDialog(QDialog):
             if kind == "finding":
                 return val
         return None
+
+    def _junk(self):
+        f = self._current_finding()
+        if f:
+            self.junk.emit(list(f.suggestions))
+            self.trash.setEnabled(False)
+            self.trash.setText("Added to Pending")
 
     def _relink(self):
         f = self._current_finding()

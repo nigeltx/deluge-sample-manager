@@ -75,9 +75,10 @@ def remember(rec: "FactoryRecord | None") -> None:
 
 
 def is_factory_card(rel: str) -> bool:
-    """A factory sample: under SAMPLES/FACTORY, or in the factory record wherever it now sits. They are locked:
-    only Initialize Factory Samples and Sort the card by type may move them."""
-    return rel.upper().startswith(PREFIX) or rel.lower() in _KNOWN
+    """A factory sample: an audio file under SAMPLES/FACTORY, or in the factory record wherever it now sits. They are
+    locked: only Initialize Factory Samples and Sort the card by type may move them. Other files there (REAPER's
+    .reapeaks …) are not samples, so not locked (0.16)."""
+    return rel.lower() in _KNOWN or (rel.upper().startswith(PREFIX) and is_audio(rel))
 
 
 def home(e: "Entry") -> str:
