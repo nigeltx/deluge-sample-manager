@@ -1,3 +1,13 @@
+Sample Manager. Version 0.16.1 — no more false "damaged preset" reports.
+
+Download the SampleManager-Setup .exe below and run it; it updates the version you have.
+
+- Fixed: the health check called 135 good presets damaged. Presets saved by Deluge firmware 1 to 3 start with
+  <firmwareVersion> and <earliestCompatibleFirmware> before the <sound> or <kit>, which the Deluge reads happily but a
+  strict XML check doesn't. The check now reads them the way the Deluge writes them.
+- One real flaw remains: KITS/041 Jonathan Snipes (Waterfalls) is missing a </modKnobs> tag near line 1140. It came
+  that way from Synthstrom (the backup taken before the sort has the same flaw), and the Deluge loads it anyway.
+
 Sample Manager. Version 0.16.0 — the health check finds files left by other programs.
 
 Download the SampleManager-Setup .exe below and run it; it updates the version you have.

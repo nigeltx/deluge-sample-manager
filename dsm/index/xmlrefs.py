@@ -99,9 +99,23 @@ def scan_data(data: bytes, rel: str, size: int, mtime: float) -> XmlDoc:
         if not val:
             continue                       # empty fileName = unused oscillator
         doc.refs.append(Reference(xml=rel, form=form, start=s, end=e, raw=val, row=_row_name(data, s)))
+    doc.error = well_formed_error(data) or None
+    return doc
+
+
+_DECL = re.compile(rb"^(\xef\xbb\xbf)?\s*<\?xml[^>]*\?>")
+
+
+def well_formed_error(data: bytes) -> str:
+    """'' when the file is well-formed as the Deluge writes it, else the reason. Deluge files from firmware 1–3 have
+    several elements at the top (<firmwareVersion>, <earliestCompatibleFirmware>, then <sound> or <kit>), which strict
+    XML calls "extra content" — so the check wraps the file in one outer element first (0.16.1; before, 135 good
+    factory presets were reported damaged). The declaration is blanked to spaces so line numbers stay right."""
+    m = _DECL.match(data)
+    body = (b" " * len(m.group(0)) + data[m.end():]) if m else data
     try:
         from lxml import etree
-        etree.fromstring(data, etree.XMLParser(recover=False, huge_tree=True))
+        etree.fromstring(b"<deluge>" + body + b"</deluge>", etree.XMLParser(recover=False, huge_tree=True))
     except Exception as e:  # noqa: BLE001
-        doc.error = f"Not well-formed XML: {e}"
-    return doc
+        return f"Not well-formed XML: {e}"
+    return ""

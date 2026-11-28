@@ -85,3 +85,17 @@ def test_health(card, tmp_path):
     layout = " ".join(f.title + f.detail for f in rep.of("layout"))
     assert "OLDSTUFF" in layout and "loose directly in SAMPLES" in layout
     assert rep.counts["xml"] == 1
+
+
+def test_old_deluge_files_are_well_formed():
+    """0.16.1: Deluge firmware 1–3 files have several top-level elements; they are not damaged."""
+    from dsm.index.xmlrefs import scan_data, well_formed_error
+    old = (b'<?xml version="1.0" encoding="UTF-8"?>\n<firmwareVersion>2.0.0-beta</firmwareVersion>\n'
+           b'<earliestCompatibleFirmware>2.0.0-beta</earliestCompatibleFirmware>\n<sound>\n\t<osc1>\n'
+           b'\t\t<type>sample</type>\n\t\t<fileName>SAMPLES/DRUMS/KICK/K.WAV</fileName>\n\t</osc1>\n</sound>\n')
+    assert well_formed_error(old) == ""
+    doc = scan_data(old, "SYNTHS/001 Sync Bass.XML", len(old), 0)
+    assert doc.error is None and [r.path for r in doc.refs] == ["SAMPLES/DRUMS/KICK/K.WAV"]
+    bad = old.replace(b"\t</osc1>\n", b"")                      # a closing tag missing, as in one factory kit
+    err = well_formed_error(bad)
+    assert "mismatch" in err.lower() and "line 8" in err

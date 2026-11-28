@@ -17,7 +17,9 @@ SECTIONS = [
                                    "shows FILE and the row is silent. Suggestions are files with the same name; "
                                    "relinking arrives in milestone M4."),
     ("convert", "Won't play on the Deluge", "Wrong header or format. Conversion arrives in milestone M3."),
-    ("xml", "Damaged preset files", "These XML files are not well-formed. The Deluge may refuse to load them."),
+    ("xml", "Damaged preset files", "These XML files are not well-formed: a tag is missing or out of place. The "
+                                    "Deluge's own reader is forgiving and often loads them anyway; the app still "
+                                    "rewrites their sample paths byte for byte, never touching the rest."),
     ("layout", "Folder layout", "Where the card differs from the type folders (SAMPLES/DRUMS/KICK, SAMPLES/BASS …)."),
     ("unused", "Unused samples", "No kit, synth or song uses these. Nothing is removed automatically."),
     ("name", "Names outside the rules", "Fine for the Deluge, but outside the app's naming rules (spec Table 2.3)."),
