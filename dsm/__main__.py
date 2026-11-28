@@ -4,6 +4,9 @@ import sys
 
 
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":     # the clean-PC check run by the release workflow
+        from dsm.selftest import run
+        return run(sys.argv[2])
     from dsm import APP_NAME, __version__
     from dsm.logs import install_excepthook, setup
     setup()

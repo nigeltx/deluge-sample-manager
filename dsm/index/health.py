@@ -1,5 +1,6 @@
 """Health check: everything wrong or worth knowing about a card, as a list of findings.
-Read-only — in milestone M2 each finding explains the fix; fix buttons arrive with M3/M4."""
+Read-only: it only finds things. The health dialog offers the fixes (relink, factory move, files to the card trash),
+which go through Pending like every other change."""
 from __future__ import annotations
 
 import os

@@ -14,15 +14,16 @@ SECTIONS = [
     ("factory", "Factory samples", "Checked against the factory record made at the factory move: samples that are "
                                    "missing from the card or no longer the size the factory made them."),
     ("missing", "Missing samples", "Presets point at these paths, but no file is there. On the Deluge the preset "
-                                   "shows FILE and the row is silent. Suggestions are files with the same name; "
-                                   "relinking arrives in milestone M4."),
-    ("convert", "Won't play on the Deluge", "Wrong header or format. Conversion arrives in milestone M3."),
+                                   "shows FILE and the row is silent. Suggestions are files with the same name: "
+                                   "Relink to this match, or Relink to a file…, fixes every preset that uses it."),
+    ("convert", "Won't play on the Deluge", "Wrong header or format for the Deluge. Send the library's copy "
+                                            "again and the app converts it, or convert it in an audio editor."),
     ("xml", "Damaged preset files", "These XML files are not well-formed: a tag is missing or out of place. The "
                                     "Deluge's own reader is forgiving and often loads them anyway; the app still "
                                     "rewrites their sample paths byte for byte, never touching the rest."),
     ("layout", "Folder layout", "Where the card differs from the type folders (SAMPLES/DRUMS/KICK, SAMPLES/BASS …)."),
     ("unused", "Unused samples", "No kit, synth or song uses these. Nothing is removed automatically."),
-    ("name", "Names outside the rules", "Fine for the Deluge, but outside the app's naming rules (spec Table 2.3)."),
+    ("name", "Names outside the rules", "Fine for the Deluge, but outside the app's naming rules (spec Table 3.3)."),
     ("temp", "Leftover clip takes", "Unsaved audio-clip recordings in CLIPS/TEMP."),
     ("junk", "Files left by other programs", "Waveform caches and folder files other programs leave beside samples "
                                              "(REAPER .reapeaks, Ableton .asd, Thumbs.db …). The Deluge never reads "

@@ -2,7 +2,8 @@
 
 Windows GUI app (Python 3.12 + PySide6): one sample library (Studio\\Samples) for every device — for now the
 Synthstrom Deluge and the Elektron Syntakt. Called Deluge Sample Manager before 0.9 (the Python package is still `dsm`).
-The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_v2.x.pdf (latest, v2.5).
+The design is the spec PDF in Google Drive: Studio → Software → Sample Manager → Sample_Manager_Spec_vX.Y.pdf. From 1.0 the
+spec's number matches the app's major.minor (Nigel, 27 Nov 2026): Spec v1.0 goes with app 1.0.x; before that it was v2.0–v2.6.
 
 The owner (Nigel) does not code or debug. Keep the code easy for Claude to change:
 plain modules, tests for every core behaviour, no clever metaprogramming.
@@ -48,9 +49,13 @@ plain modules, tests for every core behaviour, no clever metaprogramming.
   SAMPLES/PAID|FREE/<vendor>/<pack>/ layout is moved by `dsm/edit/sortcard.py` (Sort the card by type…, an EditBatch of moves).
 - `dsm/edit/duplicates.py` — 0.10 duplicates on the card (same audio) and Tidy the card; `dsm/edit/idnames.py` — rename card samples to their IDs
 - `dsm/ui` — PySide6 windows; no file logic here. Layout follows the Patch Manager: left = LIBRARY (by type: Drums › Kick …), SOURCES 🔒 (Factory / Paid / Free / User → pack), TARGETS › DELUGE and › SYNTAKT (samples on each device by type only; no card folder tree since 0.11; no colour in the left pane), SMART LISTS (library lists + the card lists Unused / Won't play / Duplicates on the card), SMART LISTS; middle = sample list (Name = ID label, Pack = the bottom folder only; green bold = on the card); right = details
+- 1.0: `ui/first_run.py` the first-run guide (shown when the library folder isn't a library; settings first_run_done;
+  layout.make_library makes the empty folders); `selftest.py` — `SampleManager.exe --selftest <folder>` runs the
+  app on a test library and card; the workflow's clean-pc job installs the Setup .exe on a fresh windows runner and
+  runs it, and the release job publishes only when it passes. `tests/conftest.py` closes the guide in tests.
 - `tests` — `fixture.py` builds a fake card; `fake_deluge.py` answers the USB file commands from a folder; `pytest -q` must pass
-- `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer and
-  publishes a GitHub release on every push to main
+- `packaging` — PyInstaller spec and Inno Setup script; `.github/workflows/build.yml` builds the installer (job build),
+  installs and self-tests it on a clean PC (job clean-pc), then publishes a GitHub release (job release) on every push to main
 
 ## Rules
 - M1–M2 were read-only; M3 adds files; M4 (current) moves, renames, relinks and trashes existing card files and rewrites preset paths.

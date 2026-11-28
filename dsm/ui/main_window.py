@@ -179,10 +179,11 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
                                      __version__, self.settings.get, _save)
         hb = QToolButton(); hb.setText("Help ▾"); hb.setPopupMode(QToolButton.InstantPopup)
         hm = QMenu(self)
+        hm.addAction("First-run guide…", lambda: self._first_run(asked=True))
+        hm.addSeparator()
         hm.addAction("Check for updates…", lambda: self.updates.check(asked=True))
         hm.addAction("Update settings…", self.updates.settings_dialog)
-        hm.addAction(f"About {APP_NAME} {__version__}", lambda: QMessageBox.information(
-            self, APP_NAME, f"{APP_NAME} {__version__}\n{REPO} on GitHub"))
+        hm.addAction(f"About {APP_NAME} {__version__}", self._about)
         hb.setMenu(hm); tb.addWidget(hb)
         tb.addSeparator()
         self.search = QLineEdit()
@@ -362,12 +363,66 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
 
     # ------------------------------------------------------------------ cards
     def _startup(self):
+        if not self.settings.get("first_run_done"):
+            from dsm.ui.first_run import describe
+            if describe(self.settings["library_root"])[1]:       # a library is there already: nothing to set up
+                self.settings["first_run_done"] = True
+                self.settings.save()
+            else:
+                self._build_library_root()
+                QTimer.singleShot(300, self._first_run)
+                return
+        self._startup_devices()
+
+    def _about(self):
+        from dsm import REPO
+        from dsm.settings import app_dir
+        QMessageBox.about(self, f"About {APP_NAME}", (
+            f"<h3>{APP_NAME} {__version__}</h3>"
+            "<p>One sample library for the Synthstrom Deluge and the Elektron Syntakt.</p>"
+            f"<p><b>Library:</b> {self.settings['library_root']}<br/>"
+            f"<b>Backups:</b> {self._backup_root()}<br/>"
+            f"<b>The app's data and logs:</b> {app_dir()}</p>"
+            f"<p>The design is the spec in Google Drive: Studio › Software › Sample Manager › "
+            f"Sample_Manager_Spec_v{'.'.join(__version__.split('.')[:2])}.pdf, which matches this version. "
+            f"What changed in each release: github.com/{REPO}/releases</p>"))
+
+    def _first_run(self, asked=False):
+        """The first-run guide (1.0): library, backups, how the Deluge connects. Then the usual start."""
+        from dsm.ui.first_run import FirstRunGuide
+        dlg = FirstRunGuide(self, self.settings["library_root"], self.settings.get("backup_root") or "")
+        if not dlg.exec() or not dlg.result_value:
+            if not asked:                         # closed without finishing: start as usual, ask again next time
+                self._startup_devices()
+            return
+        v = dlg.result_value
+        if v["make"]:
+            try:
+                layout.make_library(v["library_root"])
+            except OSError as e:
+                QMessageBox.warning(self, APP_NAME, f"Couldn't make the library folders:\n{e}")
+                return
+        old = self.settings["library_root"]
+        self.settings["library_root"] = v["library_root"]
+        if v["backup_root"]:
+            self.settings["backup_root"] = v["backup_root"]
+        self.settings["first_run_done"] = True
+        self.settings.save()
+        if v["library_root"] != old:
+            self.libdb.clear()
+        self.mapping = Mapping(self.settings["library_root"])
+        if v["deluge"] == "usb":
+            self.settings["last_card"] = USB
+        self._startup_devices()
+
+    def _startup_devices(self):
+        """The usual start once settings are known: library scan, the Deluge, the Syntakt."""
         self._fill_card_box()
         self._build_library_root()
         QTimer.singleShot(200, lambda: self._scan_library(quiet=True))
         last = self.settings.get("last_card")
         cards = find_cards()
-        target = cards[0] if cards else (last if last and os.path.isdir(last) else None)
+        target = cards[0] if cards else (last if last and last != USB and os.path.isdir(last) else None)
         if not cards and last == USB:
             self._open_usb()
         elif target:
@@ -1026,6 +1081,8 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         gen = self.list_gen
         self.current = None
         self.table.setCurrentCell(-1, -1)
+        if not rows:
+            self._clear_info()
         self.rows = rows
         self.table.setSortingEnabled(False)
         self._table_frozen(True)
@@ -1275,6 +1332,23 @@ class MainWindow(TagsMixin, SyntaktMixin, QMainWindow):
         self.wave.set_data(pk, len(data), loop)
         if (then_play or self.auto_chk.isChecked()) and self.player.available:
             self._play()
+
+    def _clear_info(self):
+        """An empty list: the details pane shows nothing (1.0 — it used to keep the last sample)."""
+        self._stop()
+        self.name_lbl.setText("—")
+        for lbl in (self.f_format, self.f_rate, self.f_len, self.f_loop, self.f_where, self.f_type, self.f_link,
+                    self.problems):
+            lbl.setText("")
+        self.wave.set_data(None)
+        self.used.clear()
+        self.tagbox.set_tags([], [], False)
+        for e, h in ((self.bpm_edit, self.bpm_how), (self.key_edit, self.key_how)):
+            e.blockSignals(True)
+            e.setText("")
+            e.setEnabled(False)
+            e.blockSignals(False)
+            h.setText("")
 
     def _show_info(self, row):
         info = row.get("info") or None

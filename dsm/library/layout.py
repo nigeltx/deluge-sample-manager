@@ -62,6 +62,21 @@ def factory_dir(root: str, device: str) -> str:
     return os.path.join(root, "Factory", device)
 
 
+def make_library(root: str) -> list[str]:
+    """Make the folders of a new, empty library (first-run guide, 1.0). Folders already there are left as they are;
+    nothing is ever moved or deleted. Returns the folders made."""
+    made = []
+    for rel in (os.path.join("Factory", "Deluge"), os.path.join("Factory", "Syntakt"), "Paid", "Free", "User",
+                os.path.join(BACKUPS, "Deluge"), os.path.join(BACKUPS, "Syntakt"), APP_FOLDER):
+        top = rel.split(os.sep)[0]
+        real = find_child(root, top) if os.path.isdir(root) else None
+        path = os.path.join(root, real or top, *rel.split(os.sep)[1:])
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+            made.append(path)
+    return made
+
+
 def find_child(parent: str, name: str) -> str | None:
     """The real name of a child folder, matched without regard to case, or None."""
     try:

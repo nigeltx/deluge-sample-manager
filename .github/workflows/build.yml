@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.v }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,11 +58,53 @@ jobs:
         shell: bash
         run: cp "dist-installer/SampleManager-Setup-${{ steps.ver.outputs.v }}.exe" "dist-installer/DelugeSampleManager-Setup-${{ steps.ver.outputs.v }}.exe"
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: dist-installer/*.exe
+
+  clean-pc:
+    # 1.0: install the Setup .exe on a fresh Windows machine (no Python, nothing of ours) and run the installed app's
+    # self-test (dsm/selftest.py). The release is only published when it passes.
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: installer
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem installer\SampleManager-Setup-*.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Setup exited with $($p.ExitCode)" }
+          Start-Sleep -Seconds 5
+          Get-Process SampleManager -ErrorAction SilentlyContinue | Stop-Process -Force
+      - name: Self-test the installed app
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Sample Manager\SampleManager.exe"
+          if (-not (Test-Path $exe)) { throw "Not installed at $exe" }
+          $dir = "$env:RUNNER_TEMP\selftest"
+          $p = Start-Process $exe -ArgumentList "--selftest", "`"$dir`"" -Wait -PassThru
+          Get-Content "$dir\selftest.txt"
+          if ($p.ExitCode -ne 0) { throw "Self-test failed (exit $($p.ExitCode))" }
+
+  release:
+    needs: [build, clean-pc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: dist-installer
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.ver.outputs.v }}-build${{ github.run_number }}
-          name: Sample Manager ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
+          tag_name: v${{ needs.build.outputs.version }}-build${{ github.run_number }}
+          name: Sample Manager ${{ needs.build.outputs.version }} (build ${{ github.run_number }})
           body_path: RELEASE_NOTES.txt
           files: dist-installer/*.exe
           make_latest: true
